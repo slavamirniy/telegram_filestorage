@@ -24,8 +24,9 @@ Run this command on a fresh Linux server (Ubuntu/Debian/CentOS). It will downloa
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/slavamirniy/telegram_filestorage/refs/heads/main/telegram_filestorage.sh | sudo bash -s install
-Requirements
 ```
+
+## Requirements
 
 A fresh Linux Server (Root access required for auto-Nginx setup)
 
@@ -33,13 +34,13 @@ A Telegram Bot Token (from @BotFather)
 
 (Optional) A domain name pointed to your server's IP (for HTTPS)
 
-🚀 Telegram Бот для раздачи файлов
+## 🚀 Telegram Бот для раздачи файлов
 
 Превратите Telegram в ваш личный, безлимитный CDN, не потратив ни одного мегабайта на диске вашего сервера.
 
 Это ультра-легкий скрипт на чистом Bash. Вы отправляете боту файлы, а он выдает вам прямую HTTP/HTTPS ссылку для скачивания или просмотра.
 
-✨ В чем сила? (Преимущества)
+## ✨ В чем сила? (Преимущества)
 
 💾 Ноль места на диске: Медиафайлы (видео, фото, документы) никогда не скачиваются на ваш сервер. Бот забирает данные у серверов Telegram и напрямую стримит (пересылает) их в браузер пользователя.
 
@@ -53,20 +54,23 @@ A Telegram Bot Token (from @BotFather)
 
 📝 Склейка текста: Перешлите боту несколько сообщений подряд, и он автоматически соберет их в один аккуратный .txt файл для скачивания.
 
-🚀 Установка в одну строку
+## 🚀 Установка в одну строку
 
 Выполните эту команду на чистом Linux-сервере (Ubuntu/Debian/CentOS). Она скачает скрипт и сразу запустит интерактивный мастер установки:
 
-code
-Bash
-download
-content_copy
-expand_less
+```bash
 curl -sSL https://raw.githubusercontent.com/slavamirniy/telegram_filestorage/refs/heads/main/telegram_filestorage.sh | sudo bash -s install
-Требования
-
+```
 Linux сервер (нужны root-права для автоматической настройки Nginx)
 
 Токен Telegram бота (получить у @BotFather)
+
+## Требования
+
+Новый сервер Linux (для автоматической настройки Nginx требуется root-доступ)
+
+Токен Telegram-бота (от @BotFather)
+
+(необязательно) Доменное имя, привязанное к IP-адресу вашего сервера (для HTTPS)
 
 (Опционально) Домен, привязанный к IP вашего сервера (для работы по HTTPS)
