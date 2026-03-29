@@ -4,20 +4,22 @@
 
 set -euo pipefail
 
-# --- ИНТЕРНАЦИОНАЛИЗАЦИЯ / i18n ---
 LANG_SET="EN"
 
+# --- ИНТЕРНАЦИОНАЛИЗАЦИЯ / i18n ---
 msg() {
     if [[ "$LANG_SET" == "RU" ]]; then
         case "$1" in
-            "lang_prompt") echo -n "Выберите язык / Select language (1: EN, 2: RU) [2]: " ;;
             "check_deps") echo "Проверка базовых зависимостей..." ;;
             "dep_missing") echo "Утилита не найдена, устанавливаем:" ;;
             "setup_start") echo "=== Умная настройка Telegram Бота ===" ;;
-            "bot_running") echo "⚠️ Обнаружена старая конфигурация или запущенный бот." ;;
+            "bot_running") echo "⚠️ Обнаружена старая конфигурация или установленный бот." ;;
             "ask_reset") echo -n "Сбросить настройки, удалить старого бота и начать заново? (y/n) [n]: " ;;
-            "resetting") echo "Остановка службы и удаление старых настроек..." ;;
-            "abort_reset") echo "Установка отменена. Бот продолжает работать." ;;
+            "stop_old") echo "Остановка запущенных процессов бота..." ;;
+            "stop_success") echo "✅ Старый бот успешно остановлен." ;;
+            "stop_fail") echo "ℹ️ Старые процессы не найдены или уже были остановлены." ;;
+            "resetting") echo "Удаление старых настроек..." ;;
+            "abort_reset") echo "Установка отменена. Старый бот продолжает работать." ;;
             "ask_token") echo -n "Введите BOT_TOKEN (от @BotFather): " ;;
             "ask_has_domain") echo -n "Есть ли у вас ДОМЕН, привязанный к этому серверу? (y/n) [y]: " ;;
             "ask_domain") echo -n "Введите ваш ДОМЕН (например, example.com): " ;;
@@ -36,18 +38,21 @@ msg() {
             "webhook_set") echo "Webhook установлен на" ;;
             "start_polling") echo "Запуск в режиме Long Polling..." ;;
             "starting") echo "Бот запускается..." ;;
-            "need_root") echo "Для установки требуются права root. Запустите через sudo." ;;
+            "service_installed") echo "✅ Бот установлен и работает (служба systemd: telegram-bot)" ;;
+            "full_uninstall") echo "✅ Бот и все настройки полностью удалены с сервера." ;;
         esac
     else
         case "$1" in
-            "lang_prompt") echo -n "Select language / Выберите язык (1: EN, 2: RU) [1]: " ;;
             "check_deps") echo "Checking base dependencies..." ;;
             "dep_missing") echo "Utility missing, installing:" ;;
             "setup_start") echo "=== Smart Telegram Bot Setup ===" ;;
-            "bot_running") echo "⚠️ Existing bot configuration or running service detected." ;;
+            "bot_running") echo "⚠️ Existing bot configuration or service detected." ;;
             "ask_reset") echo -n "Reset settings, remove old bot, and start fresh? (y/n) [n]: " ;;
-            "resetting") echo "Stopping service and removing old configuration..." ;;
-            "abort_reset") echo "Setup aborted. The bot is still running." ;;
+            "stop_old") echo "Stopping running bot processes..." ;;
+            "stop_success") echo "✅ Old bot successfully stopped." ;;
+            "stop_fail") echo "ℹ️ No old processes found or already stopped." ;;
+            "resetting") echo "Removing old configuration..." ;;
+            "abort_reset") echo "Setup aborted. The old bot is still running." ;;
             "ask_token") echo -n "Enter BOT_TOKEN (from @BotFather): " ;;
             "ask_has_domain") echo -n "Do you have a DOMAIN pointed to this server? (y/n) [y]: " ;;
             "ask_domain") echo -n "Enter your DOMAIN (e.g., example.com): " ;;
@@ -66,34 +71,53 @@ msg() {
             "webhook_set") echo "Webhook set to" ;;
             "start_polling") echo "Starting in Long Polling mode..." ;;
             "starting") echo "Starting bot..." ;;
-            "need_root") echo "Root privileges required. Run script with sudo." ;;
+            "service_installed") echo "✅ Bot installed and running (systemd service: telegram-bot)" ;;
+            "full_uninstall") echo "✅ Bot and all settings have been completely removed from the server." ;;
         esac
     fi
 }
 
-# Выбор языка
-if [[ ! -f .env ]]; then
-    read -p "$(msg 'lang_prompt')" lang_choice
-    [[ "$lang_choice" == "2" ]] && LANG_SET="RU"
-fi
+# --- ОСТАНОВКА БОТА ---
+stop_bot() {
+    msg "stop_old"
+    local stopped="false"
+    
+    # 1. Останавливаем системную службу (если есть)
+    if systemctl is-active --quiet telegram-bot 2>/dev/null; then
+        systemctl stop telegram-bot 2>/dev/null && stopped="true"
+    fi
+    
+    # 2. Убиваем зависшие фоновые процессы этого скрипта (исключая текущий процесс установки)
+    local script_name=$(basename "$0")
+    for pid in $(pgrep -f "$script_name" 2>/dev/null || true); do
+        if [[ "$pid" != "$$" && "$pid" != $PPID ]]; then
+            kill -9 "$pid" 2>/dev/null && stopped="true"
+        fi
+    done
+    
+    if [[ "$stopped" == "true" ]]; then
+        msg "stop_success"
+    else
+        msg "stop_fail"
+    fi
+}
 
-# Проверка существующих установок
-check_existing() {
-    if systemctl is-active --quiet telegram-bot.service 2>/dev/null || [[ -f .env ]]; then
+# --- БЛОКИ УСТАНОВКИ ---
+check_and_reset() {
+    if systemctl is-active --quiet telegram-bot 2>/dev/null || [[ -f .env ]]; then
         echo ""
         msg "bot_running"
         read -p "$(msg 'ask_reset')" reset_choice
         if [[ "$reset_choice" == "y" || "$reset_choice" == "Y" || "$reset_choice" == "д" || "$reset_choice" == "Д" ]]; then
+            stop_bot
             msg "resetting"
-            systemctl stop telegram-bot.service 2>/dev/null || true
-            systemctl disable telegram-bot.service 2>/dev/null || true
+            systemctl disable telegram-bot 2>/dev/null || true
             rm -f /etc/systemd/system/telegram-bot.service
             systemctl daemon-reload
             rm -f .env .secret_key
             echo "-----------------------------------"
         else
             msg "abort_reset"
-            echo "Используйте 'bash $0 stop' для остановки бота."
             exit 0
         fi
     fi
@@ -115,119 +139,114 @@ check_base_deps() {
     done
 }
 
-# --- МАСТЕР НАСТРОЙКИ ---
 setup_wizard() {
-    if [[ ! -f .env ]]; then
-        check_existing
-        [[ $EUID -ne 0 ]] && { msg "need_root"; exit 1; }
-        check_base_deps
+    check_base_deps
+    echo ""
+    msg "setup_start"
+    
+    read -p "$(msg 'ask_token')" bot_token
+    
+    use_webhook="false"
+    base_url=""
+    bot_port=80
+    
+    read -p "$(msg 'ask_has_domain')" has_domain
+    if [[ -z "$has_domain" || "$has_domain" == "y" || "$has_domain" == "Y" || "$has_domain" == "д" || "$has_domain" == "Д" ]]; then
+        read -p "$(msg 'ask_domain')" raw_domain
+        raw_domain=$(echo "$raw_domain" | sed -e 's|^[^/]*//||' -e 's|/.*$||')
         
-        echo ""
-        msg "setup_start"
-        
-        read -p "$(msg 'ask_token')" bot_token
-        
-        use_webhook="false"
-        base_url=""
-        bot_port=80
-        
-        read -p "$(msg 'ask_has_domain')" has_domain
-        if [[ -z "$has_domain" || "$has_domain" == "y" || "$has_domain" == "Y" || "$has_domain" == "д" || "$has_domain" == "Д" ]]; then
-            read -p "$(msg 'ask_domain')" raw_domain
-            raw_domain=$(echo "$raw_domain" | sed -e 's|^[^/]*//||' -e 's|/.*$||')
+        read -p "$(msg 'ask_nginx')" setup_nginx
+        if [[ -z "$setup_nginx" || "$setup_nginx" == "y" || "$setup_nginx" == "Y" || "$setup_nginx" == "д" || "$setup_nginx" == "Д" ]]; then
+            if command -v apt-get >/dev/null 2>&1; then
+                apt-get update && apt-get install -y nginx certbot python3-certbot-nginx
+            elif command -v yum >/dev/null 2>&1; then
+                yum install -y epel-release && yum install -y nginx certbot python3-certbot-nginx
+            fi
             
-            read -p "$(msg 'ask_nginx')" setup_nginx
-            if [[ -z "$setup_nginx" || "$setup_nginx" == "y" || "$setup_nginx" == "Y" || "$setup_nginx" == "д" || "$setup_nginx" == "Д" ]]; then
-                if command -v apt-get >/dev/null 2>&1; then
-                    apt-get update && apt-get install -y nginx certbot python3-certbot-nginx
-                elif command -v yum >/dev/null 2>&1; then
-                    yum install -y epel-release && yum install -y nginx certbot python3-certbot-nginx
-                fi
-                
-                bot_port=8443
-                cat > "/etc/nginx/sites-available/$raw_domain" <<EOF
+            bot_port=8443
+            cat > "/etc/nginx/sites-available/$raw_domain" <<EOF
 server {
-    listen 80;
-    server_name $raw_domain;
-    location / {
-        proxy_pass http://127.0.0.1:$bot_port;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_buffering off;
-        proxy_read_timeout 86400;
-    }
+listen 80;
+server_name $raw_domain;
+location / {
+    proxy_pass http://127.0.0.1:$bot_port;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_buffering off;
+    proxy_read_timeout 86400;
+}
 }
 EOF
-                ln -sf "/etc/nginx/sites-available/$raw_domain" /etc/nginx/sites-enabled/
-                rm -f /etc/nginx/sites-enabled/default
-                systemctl restart nginx
-                
-                certbot --nginx -d "$raw_domain" --non-interactive --agree-tos --register-unsafely-without-email || true
-                systemctl reload nginx
-                
-                use_webhook="true"
-                base_url="https://${raw_domain}"
-            else
-                read -p "$(msg 'ask_port')" bot_port
-                bot_port=${bot_port:-80}
-                use_webhook="true"
-                [[ "$bot_port" == "80" || "$bot_port" == "443" ]] && base_url="http://${raw_domain}" || base_url="http://${raw_domain}:${bot_port}"
-            fi
+            ln -sf "/etc/nginx/sites-available/$raw_domain" /etc/nginx/sites-enabled/
+            rm -f /etc/nginx/sites-enabled/default
+            systemctl restart nginx
+            
+            certbot --nginx -d "$raw_domain" --non-interactive --agree-tos --register-unsafely-without-email || true
+            systemctl reload nginx
+            
+            use_webhook="true"
+            base_url="https://${raw_domain}"
         else
-            msg "info_polling"
-            msg "detecting_ip"
-            detected_ip=$(curl -s ifconfig.me || curl -s api.ipify.org || echo "127.0.0.1")
-            
-            read -p "$(msg 'ask_ip' "$detected_ip")" custom_ip
-            final_ip=${custom_ip:-$detected_ip}
-            
             read -p "$(msg 'ask_port')" bot_port
             bot_port=${bot_port:-80}
-            
-            use_webhook="false"
-            if [[ "$bot_port" == "80" ]]; then
-                base_url="http://${final_ip}"
-            else
-                base_url="http://${final_ip}:${bot_port}"
-            fi
+            use_webhook="true"
+            [[ "$bot_port" == "80" || "$bot_port" == "443" ]] && base_url="http://${raw_domain}" || base_url="http://${raw_domain}:${bot_port}"
         fi
+    else
+        msg "info_polling"
+        msg "detecting_ip"
+        detected_ip=$(curl -s ifconfig.me || curl -s api.ipify.org || echo "127.0.0.1")
         
-        read -p "$(msg 'ask_prefix')" prefix
-        allowed_ids=""
-
-        read -p "$(msg 'ask_allowed')" req_allow
-        if [[ "$req_allow" == "y" || "$req_allow" == "Y" || "$req_allow" == "д" || "$req_allow" == "Д" ]]; then
-            curl -s "https://api.telegram.org/bot${bot_token}/setWebhook?url=" >/dev/null
-            local offset=0
-            while true; do
-                echo ""; msg "listen_user"
-                local user_added=false
-                while [ "$user_added" = false ]; do
-                    updates=$(curl -s "https://api.telegram.org/bot${bot_token}/getUpdates?offset=$offset&timeout=5")
-                    if echo "$updates" | grep -q '"update_id"'; then
-                        upd_id=$(echo "$updates" | grep -o '"update_id":[0-9]*' | tail -1 | cut -d: -f2)
-                        u_id=$(echo "$updates" | grep -o '"from":{"id":[0-9]*' | tail -1 | cut -d: -f3)
-                        u_name=$(echo "$updates" | grep -o '"first_name":"[^"]*"' | tail -1 | cut -d'"' -f4 | sed 's/\\//g')
-                        
-                        offset=$((upd_id + 1))
-                        
-                        msg "user_found"; echo " ID: $u_id | Name: $u_name"
-                        read -p "$(msg 'ask_add_user')" add_u
-                        if [[ -z "$add_u" || "$add_u" == "y" || "$add_u" == "Y" || "$add_u" == "д" || "$add_u" == "Д" ]]; then
-                            [[ -z "$allowed_ids" ]] && allowed_ids="$u_id" || allowed_ids="$allowed_ids,$u_id"
-                        fi
-                        user_added=true
-                    fi
-                    sleep 1
-                done
-                
-                read -p "$(msg 'ask_more_user')" more_u
-                [[ "$more_u" != "y" && "$more_u" != "Y" && "$more_u" != "д" && "$more_u" != "Д" ]] && break
-            done
+        read -p "$(msg 'ask_ip' "$detected_ip")" custom_ip
+        final_ip=${custom_ip:-$detected_ip}
+        
+        read -p "$(msg 'ask_port')" bot_port
+        bot_port=${bot_port:-80}
+        
+        use_webhook="false"
+        if [[ "$bot_port" == "80" ]]; then
+            base_url="http://${final_ip}"
+        else
+            base_url="http://${final_ip}:${bot_port}"
         fi
+    fi
+    
+    read -p "$(msg 'ask_prefix')" prefix
+    allowed_ids=""
 
-        # Сохранение с кавычками, чтобы пробелы не ломали чтение
-        cat > .env <<EOF
+    read -p "$(msg 'ask_allowed')" req_allow
+    if [[ "$req_allow" == "y" || "$req_allow" == "Y" || "$req_allow" == "д" || "$req_allow" == "Д" ]]; then
+        curl -s "https://api.telegram.org/bot${bot_token}/setWebhook?url=" >/dev/null
+        local offset=0
+        while true; do
+            echo ""; msg "listen_user"
+            local user_added=false
+            while [ "$user_added" = false ]; do
+                updates=$(curl -s "https://api.telegram.org/bot${bot_token}/getUpdates?offset=$offset&timeout=5")
+                if echo "$updates" | grep -q '"update_id"'; then
+                    upd_id=$(echo "$updates" | grep -o '"update_id":[0-9]*' | tail -1 | cut -d: -f2)
+                    u_id=$(echo "$updates" | grep -o '"from":{"id":[0-9]*' | tail -1 | cut -d: -f3)
+                    u_name=$(echo "$updates" | grep -o '"first_name":"[^"]*"' | tail -1 | cut -d'"' -f4 | sed 's/\\//g')
+                    
+                    offset=$((upd_id + 1))
+                    
+                    msg "user_found"; echo " ID: $u_id | Name: $u_name"
+                    read -p "$(msg 'ask_add_user')" add_u
+                    if [[ -z "$add_u" || "$add_u" == "y" || "$add_u" == "Y" || "$add_u" == "д" || "$add_u" == "Д" ]]; then
+                        [[ -z "$allowed_ids" ]] && allowed_ids="$u_id" || allowed_ids="$allowed_ids,$u_id"
+                    fi
+                    user_added=true
+                fi
+                sleep 1
+            done
+            
+            read -p "$(msg 'ask_more_user')" more_u
+            [[ "$more_u" != "y" && "$more_u" != "Y" && "$more_u" != "д" && "$more_u" != "Д" ]] && break
+        done
+    fi
+
+    # Запись .env
+    cat > .env <<EOF
 BOT_TOKEN="$bot_token"
 BASE_URL="$base_url"
 PORT="$bot_port"
@@ -235,49 +254,64 @@ PREFIX="$prefix"
 ALLOWED_USER_IDS="$allowed_ids"
 USE_WEBHOOK="$use_webhook"
 EOF
-        echo ""; msg "setup_done"; echo "-----------------------------------"
-    fi
+    echo ""; msg "setup_done"; echo "-----------------------------------"
 }
 
-# --- ЗАПУСК МАСТЕРА (ЕСЛИ НУЖНО) ---
-# Запускаем мастер только если передан аргумент 'install'
-if [[ "${1:-start}" == "install" ]]; then
-    setup_wizard
-fi
+install_systemd() {
+    cat > /etc/systemd/system/telegram-bot.service <<EOF
+[Unit]
+Description=Telegram File Sharing Bot
+After=network.target
 
-# Безопасная загрузка .env (поддерживает пробелы)
-if [[ -f .env ]]; then
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$(pwd)
+ExecStart=$(realpath "$0") start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable telegram-bot
+    systemctl start telegram-bot
+    msg "service_installed"
+    echo "Logs: sudo journalctl -u telegram-bot -f"
+}
+
+# --- ИНИЦИАЛИЗАЦИЯ (Для старта) ---
+load_env() {
+    if [[ ! -f .env ]]; then
+        echo "Ошибка: .env файл не найден. Выполните 'sudo bash $0 install' для настройки."
+        exit 1
+    fi
     set -a
     source .env
     set +a
-fi
 
-# Если после мастера файла все еще нет (например, прервали), выходим.
-if [[ ! -f .env && "${1:-start}" == "start" ]]; then
-    echo "Ошибка: .env файл не найден. Выполните 'sudo bash $0 install' для настройки."
-    exit 1
-fi
+    : "${BOT_TOKEN:?BOT_TOKEN not set}"
+    : "${BASE_URL:?BASE_URL not set}"
+    : "${PORT:=80}"
+    : "${PREFIX:=}"
+    : "${ALLOWED_USER_IDS:=}"
+    : "${USE_WEBHOOK:=false}"
 
-: "${BOT_TOKEN:?BOT_TOKEN not set}"
-: "${BASE_URL:?BASE_URL not set}"
-: "${PORT:=80}"
-: "${PREFIX:=}"
-: "${ALLOWED_USER_IDS:=}"
-: "${USE_WEBHOOK:=false}"
+    SECRET_KEY_FILE=".secret_key"
+    if [[ ! -f "$SECRET_KEY_FILE" ]]; then
+        openssl rand -hex 32 > "$SECRET_KEY_FILE"
+        chmod 600 "$SECRET_KEY_FILE"
+    fi
+    SECRET_KEY=$(cat "$SECRET_KEY_FILE")
 
-# Ключ шифрования
-SECRET_KEY_FILE=".secret_key"
-if [[ ! -f "$SECRET_KEY_FILE" ]]; then
-    openssl rand -hex 32 > "$SECRET_KEY_FILE"
-    chmod 600 "$SECRET_KEY_FILE"
-fi
-SECRET_KEY=$(cat "$SECRET_KEY_FILE")
+    API="https://api.telegram.org/bot${BOT_TOKEN}"
+    CACHE_DIR="/tmp/tg_bot_cache"
+    TEXT_BUFFER_DIR="/tmp/tg_text_buffer"
+    mkdir -p "$CACHE_DIR" "$TEXT_BUFFER_DIR"
+}
 
-API="https://api.telegram.org/bot${BOT_TOKEN}"
-CACHE_DIR="/tmp/tg_bot_cache"
-TEXT_BUFFER_DIR="/tmp/tg_text_buffer"
-mkdir -p "$CACHE_DIR" "$TEXT_BUFFER_DIR"
-
+# --- ЛОГИКА БОТА ---
 encode_data() { echo -n "$1" | openssl enc -aes-256-cbc -a -A -pbkdf2 -pass pass:"$SECRET_KEY" 2>/dev/null | tr '+/' '-_' | tr -d '='; }
 decode_data() {
     local padded=$(echo -n "$1" | tr '_-' '/+')
@@ -316,7 +350,6 @@ process_update() {
     local msg_id=$(echo "$json" | grep -o '"message_id":[^,]*' | grep -o '[0-9]*$' || true)
     
     [[ -z "$chat_id" ]] && return
-    
     if [[ -n "$ALLOWED_USER_IDS" ]] && ! [[ ",${ALLOWED_USER_IDS}," == *",${user_id},"* ]]; then return; fi
     
     if echo "$json" | grep -q '"document"'; then
@@ -430,54 +463,45 @@ auto_restart() {
     fi
 }
 
-# --- МЕНЮ УПРАВЛЕНИЯ ---
+# --- ТОЧКИ ВХОДА ---
 case "${1:-start}" in
     start)
+        load_env
         auto_restart
         ;;
     install)
-        [[ $EUID -ne 0 ]] && { echo "Запустите с sudo: sudo bash $0 install"; exit 1; }
+        [[ $EUID -ne 0 ]] && { echo "Пожалуйста, запустите через sudo: sudo bash $0 install"; exit 1; }
         
-        cat > /etc/systemd/system/telegram-bot.service <<EOF
-[Unit]
-Description=Telegram File Sharing Bot
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=$(pwd)
-ExecStart=$(realpath "$0") start
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-        systemctl daemon-reload
-        systemctl enable telegram-bot
-        systemctl start telegram-bot
-        echo "✅ Бот установлен и работает (служба systemd: telegram-bot)"
-        echo "Проверить логи: sudo journalctl -u telegram-bot -f"
+        read -p "Select language / Выберите язык (1: EN, 2: RU) [1]: " lang_choice
+        [[ "$lang_choice" == "2" ]] && LANG_SET="RU" || LANG_SET="EN"
+        
+        check_and_reset
+        setup_wizard
+        install_systemd
         ;;
     stop)
-        systemctl stop telegram-bot 2>/dev/null || true
-        echo "Бот остановлен."
+        read -p "Select language / Выберите язык (1: EN, 2: RU) [1]: " lang_choice
+        [[ "$lang_choice" == "2" ]] && LANG_SET="RU" || LANG_SET="EN"
+        
+        stop_bot
         ;;
     status)
         systemctl status telegram-bot
         ;;
     uninstall)
-        [[ $EUID -ne 0 ]] && { echo "Запустите с sudo: sudo bash $0 uninstall"; exit 1; }
-        systemctl stop telegram-bot 2>/dev/null || true
+        [[ $EUID -ne 0 ]] && { echo "Пожалуйста, запустите через sudo"; exit 1; }
+        read -p "Select language / Выберите язык (1: EN, 2: RU) [1]: " lang_choice
+        [[ "$lang_choice" == "2" ]] && LANG_SET="RU" || LANG_SET="EN"
+        
+        stop_bot
         systemctl disable telegram-bot 2>/dev/null || true
         rm -f /etc/systemd/system/telegram-bot.service
         systemctl daemon-reload
         rm -f .env .secret_key
-        echo "Бот и настройки полностью удалены."
+        msg "full_uninstall"
         ;;
     *)
-        echo "Использование: $0 {install|start|stop|status|uninstall}"
+        echo "Использование / Usage: $0 {install|start|stop|status|uninstall}"
         exit 1
         ;;
 esac
