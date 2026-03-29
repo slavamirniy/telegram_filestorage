@@ -1,5 +1,4 @@
-#!/bin/bash
-
+#!/usr/bin/env bash
 set -euo pipefail
 
 LANG_SET="EN"
@@ -17,8 +16,8 @@ msg() {
             "ask_nginx") echo -n "Настроить Nginx и HTTPS (Let's Encrypt) автоматически? (y/n) [y]: " ;;
             "detecting_ip") echo "Определяем IP адрес сервера..." ;;
             "ask_ip") echo -n "Подтвердите IP сервера (Enter для использования $2): " ;;
-            "info_polling") echo "Домен не указан. Бот будет раздавать файлы по HTTP и работать в режиме Long Polling (без Webhook)." ;;
-            "ask_port") echo -n "На каком порту запустить раздачу файлов? [80]: " ;;
+            "info_polling") echo "Домен не указан. Бот будет работать по HTTP/IP без webhook." ;;
+            "ask_port") echo -n "На каком локальном порту запускать бота? [8080]: " ;;
             "ask_prefix") echo -n "Введите ПРЕФИКС для сообщений (необязательно): " ;;
             "ask_allowed") echo -n "Включить приватный режим (доступ только по вашему ID)? (y/n) [n]: " ;;
             "listen_user") echo "Ожидание... Напишите ЛЮБОЕ сообщение вашему боту в Telegram прямо сейчас." ;;
@@ -27,9 +26,8 @@ msg() {
             "ask_more_user") echo -n "Ожидать еще одного пользователя? (y/n) [n]: " ;;
             "setup_done") echo "Настройка завершена! Конфигурация сохранена в .env" ;;
             "webhook_set") echo "Webhook установлен на" ;;
-            "start_polling") echo "Запуск в режиме Long Polling..." ;;
             "starting") echo "Бот запускается..." ;;
-            "need_root") echo "Для установки на порт 80 или настройки Nginx требуются права root. Запустите через sudo." ;;
+            "need_root") echo "Для установки Nginx/HTTPS требуются права root. Запустите через sudo." ;;
             "menu_not_configured") echo "Конфигурация не найдена. Запускаем первичную настройку..." ;;
             "menu_detected_config") echo "Обнаружена существующая конфигурация." ;;
             "state_service_active") echo "Systemd-служба telegram-bot: АКТИВНА" ;;
@@ -56,6 +54,7 @@ msg() {
             "press_enter") echo -n "Нажмите Enter для продолжения..." ;;
             "reconfig_done") echo "Старая конфигурация удалена. Запускаем настройку..." ;;
             "must_use_sudo") echo "Для этой операции нужны права root. Запустите через sudo." ;;
+            "txt_not_found") echo "Текст не найден или истёк." ;;
         esac
     else
         case "$1" in
@@ -65,12 +64,12 @@ msg() {
             "setup_start") echo "=== Smart Telegram Bot Setup ===" ;;
             "ask_token") echo -n "Enter BOT_TOKEN (from @BotFather): " ;;
             "ask_has_domain") echo -n "Do you have a DOMAIN pointed to this server? (y/n) [y]: " ;;
-            "ask_domain") echo -n "Enter your DOMAIN (e.g., example.com): " ;;
+            "ask_domain") echo -n "Enter your DOMAIN (e.g. example.com): " ;;
             "ask_nginx") echo -n "Configure Nginx and HTTPS (Let's Encrypt) automatically? (y/n) [y]: " ;;
             "detecting_ip") echo "Detecting server IP address..." ;;
             "ask_ip") echo -n "Confirm server IP (Press Enter to use $2): " ;;
-            "info_polling") echo "No domain provided. Bot will serve HTTP links and use Long Polling mode (no Webhook)." ;;
-            "ask_port") echo -n "Which port to run the file server on? [80]: " ;;
+            "info_polling") echo "No domain provided. Bot will work over HTTP/IP without webhook." ;;
+            "ask_port") echo -n "Which local port to run the bot on? [8080]: " ;;
             "ask_prefix") echo -n "Enter PREFIX for messages (optional): " ;;
             "ask_allowed") echo -n "Enable private mode (restrict by User IDs)? (y/n) [n]: " ;;
             "listen_user") echo "Waiting... Send ANY message to your bot in Telegram right now." ;;
@@ -79,9 +78,8 @@ msg() {
             "ask_more_user") echo -n "Wait for another user? (y/n) [n]: " ;;
             "setup_done") echo "Setup complete! Configuration saved to .env" ;;
             "webhook_set") echo "Webhook set to" ;;
-            "start_polling") echo "Starting in Long Polling mode..." ;;
             "starting") echo "Starting bot..." ;;
-            "need_root") echo "Root privileges required for port 80 or Nginx. Run script with sudo." ;;
+            "need_root") echo "Root privileges required for Nginx/HTTPS setup. Run with sudo." ;;
             "menu_not_configured") echo "Configuration not found. Starting initial setup..." ;;
             "menu_detected_config") echo "Existing configuration detected." ;;
             "state_service_active") echo "Systemd service telegram-bot: ACTIVE" ;;
@@ -108,29 +106,36 @@ msg() {
             "press_enter") echo -n "Press Enter to continue..." ;;
             "reconfig_done") echo "Old configuration removed. Starting setup..." ;;
             "must_use_sudo") echo "Root privileges required for this operation. Run with sudo." ;;
+            "txt_not_found") echo "Text not found or expired." ;;
         esac
     fi
 }
 
 choose_language() {
     read -p "$(msg 'lang_prompt')" lang_choice
-    [[ "$lang_choice" == "2" ]] && LANG_SET="RU" || LANG_SET="EN"
+    if [[ "$lang_choice" == "2" ]]; then
+        LANG_SET="RU"
+    else
+        LANG_SET="EN"
+    fi
 }
 
 check_base_deps() {
     msg "check_deps"
-    for cmd in curl openssl nc; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            msg "dep_missing"; echo " $cmd"
-            if command -v apt-get >/dev/null 2>&1; then
-                sudo apt-get update && sudo apt-get install -y "$cmd" netcat-openbsd || exit 1
-            elif command -v yum >/dev/null 2>&1; then
-                sudo yum install -y "$cmd" nc || exit 1
-            else
-                exit 1
-            fi
-        fi
+    local missing=()
+    for cmd in curl openssl python3 systemctl; do
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
     done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        msg "dep_missing"; echo " ${missing[*]}"
+        if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y curl openssl python3 systemd || true
+        elif command -v yum >/dev/null 2>&1; then
+            sudo yum install -y curl openssl python3 systemd || true
+        fi
+    fi
 }
 
 setup_wizard() {
@@ -140,9 +145,9 @@ setup_wizard() {
 
     read -p "$(msg 'ask_token')" bot_token
 
-    use_webhook="false"
-    base_url=""
-    bot_port=80
+    local use_webhook="false"
+    local base_url=""
+    local bot_port="8080"
 
     read -p "$(msg 'ask_has_domain')" has_domain
     if [[ -z "$has_domain" || "$has_domain" == "y" || "$has_domain" == "Y" || "$has_domain" == "д" || "$has_domain" == "Д" ]]; then
@@ -154,29 +159,42 @@ setup_wizard() {
             [[ $EUID -ne 0 ]] && { msg "need_root"; exit 1; }
 
             if command -v apt-get >/dev/null 2>&1; then
-                apt-get update && apt-get install -y nginx certbot python3-certbot-nginx
+                apt-get update
+                apt-get install -y nginx certbot python3-certbot-nginx
             elif command -v yum >/dev/null 2>&1; then
-                yum install -y epel-release && yum install -y nginx certbot python3-certbot-nginx
+                yum install -y epel-release || true
+                yum install -y nginx certbot python3-certbot-nginx
             fi
 
-            bot_port=8443
+            bot_port="8080"
+
             mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
             cat > "/etc/nginx/sites-available/$raw_domain" <<EOF
 server {
     listen 80;
     server_name $raw_domain;
+
+    client_max_body_size 100m;
+
     location / {
         proxy_pass http://127.0.0.1:$bot_port;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_buffering off;
+        proxy_request_buffering off;
         proxy_read_timeout 86400;
+        proxy_connect_timeout 60;
+        proxy_send_timeout 86400;
     }
 }
 EOF
-            ln -sf "/etc/nginx/sites-available/$raw_domain" /etc/nginx/sites-enabled/
+
+            ln -sf "/etc/nginx/sites-available/$raw_domain" "/etc/nginx/sites-enabled/$raw_domain"
             rm -f /etc/nginx/sites-enabled/default
-            systemctl restart nginx || true
+            nginx -t
+            systemctl restart nginx
 
             certbot --nginx -d "$raw_domain" --non-interactive --agree-tos --register-unsafely-without-email || true
             systemctl reload nginx || true
@@ -185,22 +203,25 @@ EOF
             base_url="https://${raw_domain}"
         else
             read -p "$(msg 'ask_port')" bot_port
-            bot_port=${bot_port:-80}
+            bot_port=${bot_port:-8080}
             use_webhook="true"
-            [[ "$bot_port" == "80" || "$bot_port" == "443" ]] && base_url="http://${raw_domain}" || base_url="http://${raw_domain}:${bot_port}"
+            if [[ "$bot_port" == "80" || "$bot_port" == "443" ]]; then
+                base_url="http://${raw_domain}"
+            else
+                base_url="http://${raw_domain}:${bot_port}"
+            fi
         fi
     else
         msg "info_polling"
         msg "detecting_ip"
         detected_ip=$(curl -s ifconfig.me || curl -s api.ipify.org || echo "127.0.0.1")
-
         read -p "$(msg 'ask_ip' "$detected_ip")" custom_ip
         final_ip=${custom_ip:-$detected_ip}
 
         read -p "$(msg 'ask_port')" bot_port
-        bot_port=${bot_port:-80}
-
+        bot_port=${bot_port:-8080}
         use_webhook="false"
+
         if [[ "$bot_port" == "80" ]]; then
             base_url="http://${final_ip}"
         else
@@ -209,25 +230,23 @@ EOF
     fi
 
     read -p "$(msg 'ask_prefix')" prefix
-    allowed_ids=""
-
+    local allowed_ids=""
     read -p "$(msg 'ask_allowed')" req_allow
+
     if [[ "$req_allow" == "y" || "$req_allow" == "Y" || "$req_allow" == "д" || "$req_allow" == "Д" ]]; then
-        curl -s "https://api.telegram.org/bot${bot_token}/setWebhook?url=" >/dev/null
+        curl -s "https://api.telegram.org/bot${bot_token}/deleteWebhook" >/dev/null || true
         local offset=0
         while true; do
             echo ""
             msg "listen_user"
             local user_added=false
-            while [ "$user_added" = false ]; do
+            while [[ "$user_added" == false ]]; do
                 updates=$(curl -s "https://api.telegram.org/bot${bot_token}/getUpdates?offset=$offset&timeout=5")
                 if echo "$updates" | grep -q '"update_id"'; then
                     upd_id=$(echo "$updates" | grep -o '"update_id":[0-9]*' | tail -1 | cut -d: -f2)
                     u_id=$(echo "$updates" | grep -o '"from":{"id":[0-9]*' | tail -1 | cut -d: -f3)
                     u_name=$(echo "$updates" | grep -o '"first_name":"[^"]*"' | tail -1 | cut -d'"' -f4 | sed 's/\\//g')
-
                     offset=$((upd_id + 1))
-
                     msg "user_found"; echo " ID: $u_id | Name: $u_name"
                     read -p "$(msg 'ask_add_user')" add_u
                     if [[ -z "$add_u" || "$add_u" == "y" || "$add_u" == "Y" || "$add_u" == "д" || "$add_u" == "Д" ]]; then
@@ -247,8 +266,8 @@ EOF
 BOT_TOKEN=$bot_token
 BASE_URL=$base_url
 PORT=$bot_port
-PREFIX="$prefix"
-ALLOWED_USER_IDS="$allowed_ids"
+PREFIX=$(printf '%q' "$prefix")
+ALLOWED_USER_IDS=$allowed_ids
 USE_WEBHOOK=$use_webhook
 EOF
 
@@ -260,68 +279,141 @@ EOF
 load_env_safe() {
     [[ -f .env ]] || return 1
     set -a
+    # shellcheck disable=SC1091
     source ./.env
     set +a
 }
 
 SECRET_KEY_FILE=".secret_key"
 
-encode_data() { echo -n "$1" | openssl enc -aes-256-cbc -a -A -pbkdf2 -pass pass:"$SECRET_KEY" 2>/dev/null | tr '+/' '-_' | tr -d '='; }
+encode_data() {
+    echo -n "$1" | openssl enc -aes-256-cbc -a -A -pbkdf2 -pass pass:"$SECRET_KEY" 2>/dev/null | tr '+/' '-_' | tr -d '='
+}
+
 decode_data() {
     local padded
     padded=$(echo -n "$1" | tr '_-' '/+')
-    local mod=$((${#padded} % 4))
+    local mod
+    mod=$((${#padded} % 4))
     [[ $mod -gt 0 ]] && padded="${padded}$(printf '=%.0s' $(seq 1 $((4 - mod))))"
     echo -n "$padded" | openssl enc -aes-256-cbc -d -a -A -pbkdf2 -pass pass:"$SECRET_KEY" 2>/dev/null
 }
 
 file_cache_path() { echo "${FILE_CACHE_DIR}/$1.meta"; }
+file_id_map_path() { echo "${FILE_ID_MAP_DIR}/$1.id"; }
 text_cache_path() { echo "${TEXT_CACHE_DIR}/$1.txt"; }
-text_map_path() { echo "${TEXT_MAP_DIR}/$1.map"; }
+
+safe_http_send() {
+    local code="$1"
+    local ctype="$2"
+    local body="$3"
+    local body_len
+    body_len=$(printf "%s" "$body" | wc -c | awk '{print $1}')
+    printf "HTTP/1.1 %s\r\n" "$code"
+    [[ -n "$ctype" ]] && printf "Content-Type: %s\r\n" "$ctype"
+    printf "Content-Length: %s\r\n" "$body_len"
+    printf "Connection: close\r\n"
+    printf "Cache-Control: no-store\r\n"
+    printf "\r\n"
+    printf "%s" "$body"
+}
+
+safe_http_not_found() {
+    safe_http_send "404 Not Found" "text/plain; charset=utf-8" "Not Found"
+}
 
 save_file_cache() {
-    local file_id="$1"
-    local ext="$2"
-    local file_path="$3"
-    cat > "$(file_cache_path "$file_id")" <<EOF
+    local short_id="$1"
+    local file_id="$2"
+    local ext="$3"
+    local file_path="$4"
+
+    cat > "$(file_cache_path "$short_id")" <<EOF
+SHORT_ID=$short_id
 FILE_ID=$file_id
 EXT=$ext
 FILE_PATH=$file_path
 DIRECT_URL=https://api.telegram.org/file/bot${BOT_TOKEN}/${file_path}
 UPDATED_AT=$(date +%s)
 EOF
+
+    printf '%s' "$short_id" > "$(file_id_map_path "$file_id")"
 }
 
 load_file_cache() {
-    local file_id="$1"
+    local short_id="$1"
     local cache_file
-    cache_file=$(file_cache_path "$file_id")
+    cache_file=$(file_cache_path "$short_id")
     [[ -f "$cache_file" ]] || return 1
+    # shellcheck disable=SC1090
     source "$cache_file"
+}
+
+find_or_create_short_id_for_file() {
+    local file_id="$1"
+    local ext="$2"
+
+    if [[ -f "$(file_id_map_path "$file_id")" ]]; then
+        local existing
+        existing=$(cat "$(file_id_map_path "$file_id")")
+        [[ -n "$existing" ]] && { echo "$existing"; return; }
+    fi
+
+    local short_id
+    while true; do
+        short_id=$(openssl rand -hex 12)
+        [[ ! -f "$(file_cache_path "$short_id")" ]] && break
+    done
+
+    echo "$short_id"
 }
 
 direct_url_valid() {
     local url="$1"
     [[ -z "$url" ]] && return 1
     local code
-    code=$(curl -s -L -r 0-0 -o /dev/null -w "%{http_code}" --max-time 15 "$url" || echo 000)
+    code=$(curl -s -L -r 0-0 -o /dev/null -w "%{http_code}" --max-time 20 "$url" || echo 000)
     [[ "$code" == "200" || "$code" == "206" ]]
 }
 
-refresh_file_cache() {
-    local file_id="$1"
-    local ext="$2"
+refresh_file_cache_by_short_id() {
+    local short_id="$1"
+    load_file_cache "$short_id" || return 1
+
+    local response file_path
+    response=$(curl -s "${API}/getFile?file_id=${FILE_ID}")
+    file_path=$(echo "$response" | grep -o '"file_path":"[^"]*"' | cut -d'"' -f4)
+    [[ -n "$file_path" ]] || return 1
+
+    save_file_cache "$short_id" "$FILE_ID" "$EXT" "$file_path"
+}
+
+create_or_update_file_link() {
+    local chat_id="$1"
+    local file_id="$2"
+    local ext="$3"
+
+    local short_id
+    short_id=$(find_or_create_short_id_for_file "$file_id" "$ext")
+
     local response file_path
     response=$(curl -s "${API}/getFile?file_id=${file_id}")
     file_path=$(echo "$response" | grep -o '"file_path":"[^"]*"' | cut -d'"' -f4)
-    [[ -n "$file_path" ]] || return 1
-    save_file_cache "$file_id" "$ext" "$file_path"
+
+    if [[ -n "$file_path" ]]; then
+        save_file_cache "$short_id" "$file_id" "$ext" "$file_path"
+    fi
+
+    local token
+    token=$(encode_data "f|${short_id}")
+    local message="${PREFIX}${BASE_URL}/file/${token}.${ext}"
+    curl -s -X POST "${API}/sendMessage" --data-urlencode "chat_id=${chat_id}" --data-urlencode "text=${message}" >/dev/null
 }
 
 cleanup_text_cache() {
     local now
     now=$(date +%s)
-    for f in "${TEXT_CACHE_DIR}"/*.txt "${TEXT_MAP_DIR}"/*.map; do
+    for f in "${TEXT_CACHE_DIR}"/*.txt; do
         [[ -e "$f" ]] || continue
         local mt
         mt=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
@@ -332,190 +424,353 @@ cleanup_text_cache() {
 }
 
 extract_json_text_field() {
-    echo "$1" | sed -n 's/.*"text":"\([^"]*\)".*/\1/p' | head -1 | sed 's/\\"/"/g; s/\\\\/\\/g; s/\\n//g; s/\\r//g'
+    python3 - <<'PY' "$1"
+import sys, json
+raw = sys.argv[1]
+try:
+    obj = json.loads(raw)
+except Exception:
+    print("", end="")
+    raise SystemExit(0)
+
+msg = obj.get("message") or {}
+text = msg.get("text", "")
+print(text.replace("\n", "").replace("\r", ""), end="")
+PY
 }
 
-handle_file() {
-    local chat_id="$1" file_id="$2" ext="$3"
-    refresh_file_cache "$file_id" "$ext" >/dev/null 2>&1 || true
-    local encoded
-    encoded=$(encode_data "file|${file_id}|${ext}")
-    local message="${PREFIX}${BASE_URL}/file/${encoded}.${ext}"
-    curl -s -X POST "${API}/sendMessage" --data-urlencode "chat_id=${chat_id}" --data-urlencode "text=${message}" >/dev/null
+extract_json_field_python() {
+    local json="$1"
+    local expr="$2"
+    python3 - <<'PY' "$json" "$expr"
+import sys, json
+raw = sys.argv[1]
+expr = sys.argv[2]
+try:
+    obj = json.loads(raw)
+except Exception:
+    print("", end="")
+    raise SystemExit(0)
+
+msg = obj.get("message") or {}
+val = ""
+if expr == "chat_id":
+    val = msg.get("chat", {}).get("id", "")
+elif expr == "user_id":
+    val = msg.get("from", {}).get("id", "")
+elif expr == "message_id":
+    val = msg.get("message_id", "")
+elif expr == "document_file_id":
+    val = msg.get("document", {}).get("file_id", "")
+elif expr == "document_file_name":
+    val = msg.get("document", {}).get("file_name", "")
+elif expr == "video_file_id":
+    val = msg.get("video", {}).get("file_id", "")
+elif expr == "audio_file_id":
+    val = msg.get("audio", {}).get("file_id", "")
+elif expr == "audio_file_name":
+    val = msg.get("audio", {}).get("file_name", "")
+elif expr == "voice_file_id":
+    val = msg.get("voice", {}).get("file_id", "")
+elif expr == "photo_last_file_id":
+    photos = msg.get("photo", [])
+    val = photos[-1].get("file_id", "") if photos else ""
+print(val, end="")
+PY
 }
 
 handle_text() {
-    local chat_id="$1" msg_id="$2" user_id="$3" text_content="$4"
+    local chat_id="$1"
+    local user_id="$2"
+    local text_content="$3"
+
     local buffer_file="${TEXT_BUFFER_DIR}/${chat_id}_${user_id}"
     printf '%s' "$text_content" >> "$buffer_file"
     printf '\n' >> "$buffer_file"
 
     (
         sleep 2
-        [[ ! -f "$buffer_file" ]] && exit 0
+        [[ -f "$buffer_file" ]] || exit 0
+
         local lock_dir="${buffer_file}.lock"
         mkdir "$lock_dir" 2>/dev/null || exit 0
+
         local joined_text
         joined_text=$(tr -d '\n' < "$buffer_file")
         rm -f "$buffer_file"
         rmdir "$lock_dir" 2>/dev/null || true
-        [[ -z "$joined_text" ]] && exit 0
+
+        [[ -n "$joined_text" ]] || exit 0
+
         cleanup_text_cache
+
         local text_id
-        text_id=$(openssl rand -hex 12)
+        while true; do
+            text_id=$(openssl rand -hex 12)
+            [[ ! -f "$(text_cache_path "$text_id")" ]] && break
+        done
+
         printf '%s' "$joined_text" > "$(text_cache_path "$text_id")"
-        cat > "$(text_map_path "$text_id")" <<EOF
-CHAT_ID=$chat_id
-USER_ID=$user_id
-MSG_ID=$msg_id
-CREATED_AT=$(date +%s)
-EOF
-        local encoded
-        encoded=$(encode_data "txt|${text_id}")
-        local message="${PREFIX}${BASE_URL}/file/${encoded}.txt"
+
+        local token
+        token=$(encode_data "t|${text_id}")
+        local message="${PREFIX}${BASE_URL}/file/${token}.txt"
         curl -s -X POST "${API}/sendMessage" --data-urlencode "chat_id=${chat_id}" --data-urlencode "text=${message}" >/dev/null
     ) &
 }
 
 process_update() {
     local json="$1"
-    local chat_id user_id msg_id
-    chat_id=$(echo "$json" | grep -o '"chat":{"id":[^,]*' | grep -o '[0-9-]*$' || true)
-    user_id=$(echo "$json" | grep -o '"from":{"id":[^,]*' | grep -o '[0-9]*$' || true)
-    msg_id=$(echo "$json" | grep -o '"message_id":[^,]*' | grep -o '[0-9]*$' || true)
 
-    [[ -z "$chat_id" ]] && return
-    if [[ -n "${ALLOWED_USER_IDS:-}" ]] && ! [[ ",${ALLOWED_USER_IDS}," == *",${user_id},"* ]]; then
-        return
+    local chat_id user_id
+    chat_id=$(extract_json_field_python "$json" "chat_id")
+    user_id=$(extract_json_field_python "$json" "user_id")
+
+    [[ -n "$chat_id" ]] || return 0
+
+    if [[ -n "${ALLOWED_USER_IDS:-}" ]]; then
+        [[ ",${ALLOWED_USER_IDS}," == *",${user_id},"* ]] || return 0
     fi
 
-    if echo "$json" | grep -q '"document"'; then
-        local file_id fname ext
-        file_id=$(echo "$json" | grep -o '"document":{"file_id":"[^"]*"' | cut -d'"' -f6)
-        fname=$(echo "$json" | grep -o '"file_name":"[^"]*"' | cut -d'"' -f4)
-        ext="${fname##*.}"
-        [[ "$ext" == "$fname" ]] && ext="bin"
-        handle_file "$chat_id" "$file_id" "$ext"
-    elif echo "$json" | grep -q '"photo":\['; then
-        local file_id
-        file_id=$(echo "$json" | grep -o '"file_id":"[^"]*"' | tail -1 | cut -d'"' -f4)
-        handle_file "$chat_id" "$file_id" "jpg"
-    elif echo "$json" | grep -q '"video"'; then
-        local file_id
-        file_id=$(echo "$json" | grep -o '"video":{"file_id":"[^"]*"' | cut -d'"' -f6)
-        handle_file "$chat_id" "$file_id" "mp4"
-    elif echo "$json" | grep -q '"text"'; then
-        local text_content
-        text_content=$(extract_json_text_field "$json")
-        handle_text "$chat_id" "$msg_id" "$user_id" "$text_content"
+    local document_file_id document_file_name video_file_id photo_file_id text_content audio_file_id audio_file_name voice_file_id
+    document_file_id=$(extract_json_field_python "$json" "document_file_id")
+    document_file_name=$(extract_json_field_python "$json" "document_file_name")
+    video_file_id=$(extract_json_field_python "$json" "video_file_id")
+    photo_file_id=$(extract_json_field_python "$json" "photo_last_file_id")
+    audio_file_id=$(extract_json_field_python "$json" "audio_file_id")
+    audio_file_name=$(extract_json_field_python "$json" "audio_file_name")
+    voice_file_id=$(extract_json_field_python "$json" "voice_file_id")
+
+    if [[ -n "$document_file_id" ]]; then
+        local ext="${document_file_name##*.}"
+        [[ "$ext" == "$document_file_name" || -z "$ext" ]] && ext="bin"
+        create_or_update_file_link "$chat_id" "$document_file_id" "$ext"
+        return 0
+    fi
+
+    if [[ -n "$photo_file_id" ]]; then
+        create_or_update_file_link "$chat_id" "$photo_file_id" "jpg"
+        return 0
+    fi
+
+    if [[ -n "$video_file_id" ]]; then
+        create_or_update_file_link "$chat_id" "$video_file_id" "mp4"
+        return 0
+    fi
+
+    if [[ -n "$audio_file_id" ]]; then
+        local ext="${audio_file_name##*.}"
+        [[ "$ext" == "$audio_file_name" || -z "$ext" ]] && ext="mp3"
+        create_or_update_file_link "$chat_id" "$audio_file_id" "$ext"
+        return 0
+    fi
+
+    if [[ -n "$voice_file_id" ]]; then
+        create_or_update_file_link "$chat_id" "$voice_file_id" "ogg"
+        return 0
+    fi
+
+    text_content=$(extract_json_text_field "$json")
+    if [[ -n "$text_content" ]]; then
+        handle_text "$chat_id" "$user_id" "$text_content"
     fi
 }
 
-serve_file() {
-    local encoded="$1"
-    local data
-    data=$(decode_data "$encoded")
+serve_text_by_id() {
+    local text_id="$1"
+    cleanup_text_cache
+    local file
+    file=$(text_cache_path "$text_id")
+    [[ -f "$file" ]] || { safe_http_not_found; return 0; }
 
-    if [[ "$data" == txt\|* ]]; then
-        local text_id cache_file content
-        text_id=$(echo "$data" | cut -d'|' -f2)
-        cache_file="$(text_cache_path "$text_id")"
-        cleanup_text_cache
-        [[ -f "$cache_file" ]] || return
-        content=$(cat "$cache_file")
-        printf "HTTP/1.1 200 OK\r\n"
-        printf "Content-Type: text/plain; charset=utf-8\r\n"
-        printf "Content-Length: %s\r\n" "${#content}"
-        printf "Connection: close\r\n\r\n"
-        printf "%s" "$content"
-        return
-    fi
-
-    if [[ "$data" == file\|* ]]; then
-        local file_id ext url="" headers clen ctype
-        file_id=$(echo "$data" | cut -d'|' -f2)
-        ext=$(echo "$data" | cut -d'|' -f3)
-        [[ -z "$ext" ]] && ext="bin"
-
-        if load_file_cache "$file_id" 2>/dev/null; then
-            if direct_url_valid "${DIRECT_URL:-}"; then
-                url="$DIRECT_URL"
-            fi
-        fi
-
-        if [[ -z "$url" ]]; then
-            refresh_file_cache "$file_id" "$ext" >/dev/null 2>&1 || {
-                printf "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
-                return
-            }
-            if load_file_cache "$file_id" 2>/dev/null; then
-                if direct_url_valid "${DIRECT_URL:-}"; then
-                    url="$DIRECT_URL"
-                fi
-            fi
-        fi
-
-        [[ -z "$url" ]] && { printf "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"; return; }
-
-        headers=$(curl -s -I --max-time 15 "$url")
-        clen=$(echo "$headers" | grep -i '^content-length:' | tr -d '\r' || true)
-        ctype=$(echo "$headers" | grep -i '^content-type:' | tr -d '\r' || true)
-
-        printf "HTTP/1.1 200 OK\r\n"
-        [[ -n "$ctype" ]] && printf "%s\r\n" "$ctype"
-        [[ -n "$clen" ]] && printf "%s\r\n" "$clen"
-        printf "Connection: close\r\n\r\n"
-        curl -s "$url"
-        return
-    fi
-
-    printf "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
+    local content
+    content=$(cat "$file")
+    safe_http_send "200 OK" "text/plain; charset=utf-8" "$content"
 }
 
-http_server() {
-    while true; do
-        {
-            local method path proto header content_length body
-            IFS=' ' read -r method path proto || exit 0
+serve_file_by_short_id() {
+    local short_id="$1"
+    load_file_cache "$short_id" || { safe_http_not_found; return 0; }
 
-            content_length=0
-            while IFS= read -r header; do
-                header="${header%$'\r'}"
-                [[ -z "$header" ]] && break
-                if echo "$header" | grep -qi '^Content-Length:'; then
-                    content_length=$(echo "$header" | awk '{print $2}' | tr -d '\r')
-                fi
-            done
+    local url=""
+    if direct_url_valid "${DIRECT_URL:-}"; then
+        url="$DIRECT_URL"
+    else
+        refresh_file_cache_by_short_id "$short_id" || { safe_http_not_found; return 0; }
+        load_file_cache "$short_id" || { safe_http_not_found; return 0; }
+        if direct_url_valid "${DIRECT_URL:-}"; then
+            url="$DIRECT_URL"
+        fi
+    fi
 
-            body=""
-            if [[ "$method" == "POST" && "$content_length" -gt 0 ]]; then
-                body=$(dd bs=1 count="$content_length" 2>/dev/null || true)
-            fi
+    [[ -n "$url" ]] || { safe_http_not_found; return 0; }
 
-            if [[ "$path" =~ ^/webhook ]] && [[ "$USE_WEBHOOK" == "true" ]]; then
-                process_update "$body" &
-                printf "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"
-            elif [[ "$path" =~ ^/file/([^.]+)\.(.+)$ ]]; then
-                local encoded="${BASH_REMATCH[1]}"
-                serve_file "$encoded" 2>/dev/null || printf "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
-            else
-                printf "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
-            fi
-        } | nc -l "$PORT"
-    done
+    local headers
+    headers=$(curl -s -I --max-time 20 "$url" || true)
+    local clen ctype
+    clen=$(echo "$headers" | grep -i '^content-length:' | tr -d '\r' || true)
+    ctype=$(echo "$headers" | grep -i '^content-type:' | tr -d '\r' || true)
+
+    printf "HTTP/1.1 200 OK\r\n"
+    [[ -n "$ctype" ]] && printf "%s\r\n" "$ctype"
+    [[ -n "$clen" ]] && printf "%s\r\n" "$clen"
+    printf "Connection: close\r\n"
+    printf "Cache-Control: public, max-age=3600\r\n"
+    printf "\r\n"
+    curl -s -L "$url"
+}
+
+python_http_server() {
+python3 - <<'PY'
+import os
+import re
+import sys
+import json
+import urllib.parse
+import subprocess
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+PORT = int(os.environ.get("PORT", "8080"))
+USE_WEBHOOK = os.environ.get("USE_WEBHOOK", "false").lower()
+SCRIPT_PATH = os.environ.get("SCRIPT_PATH", "")
+BASE_URL = os.environ.get("BASE_URL", "")
+
+def sh(*args, input_data=None):
+    p = subprocess.run(args, input=input_data, text=True, capture_output=True)
+    return p.returncode, p.stdout, p.stderr
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt, *args):
+        sys.stderr.write("%s - - [%s] %s\n" % (self.address_string(), self.log_date_time_string(), fmt % args))
+
+    def do_POST(self):
+        if self.path == "/webhook" and USE_WEBHOOK == "true":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length).decode("utf-8", "ignore") if length > 0 else ""
+            subprocess.Popen([SCRIPT_PATH, "--process-update"], stdin=subprocess.PIPE, text=True).communicate(body)
+            data = b"OK"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(data)
+            self.close_connection = True
+            return
+
+        data = b"Not Found"
+        self.send_response(404)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(data)
+        self.close_connection = True
+
+    def do_GET(self):
+        m = re.match(r"^/file/([^.]+)\.([A-Za-z0-9]+)$", self.path)
+        if not m:
+            data = b"Not Found"
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(data)
+            self.close_connection = True
+            return
+
+        token = m.group(1)
+        ext = m.group(2)
+
+        rc, stdout, stderr = sh(SCRIPT_PATH, "--serve", token, ext)
+        raw = stdout.encode("utf-8", "ignore") if isinstance(stdout, str) else stdout
+
+        if not raw:
+            data = b"Not Found"
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(data)
+            self.close_connection = True
+            return
+
+        sep = b"\r\n\r\n"
+        idx = raw.find(sep)
+        if idx == -1:
+            data = raw
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(data)
+            self.close_connection = True
+            return
+
+        header_block = raw[:idx].decode("utf-8", "ignore")
+        body = raw[idx + 4:]
+
+        first = header_block.splitlines()[0] if header_block.splitlines() else "HTTP/1.1 200 OK"
+        parts = first.split(" ", 2)
+        code = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 200
+
+        self.send_response(code)
+
+        sent_len = False
+        for line in header_block.splitlines()[1:]:
+            if ":" not in line:
+                continue
+            k, v = line.split(":", 1)
+            k = k.strip()
+            v = v.strip()
+            if k.lower() == "content-length":
+                sent_len = True
+            if k.lower() == "connection":
+                continue
+            self.send_header(k, v)
+
+        if not sent_len:
+            self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+        self.close_connection = True
+
+server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+server.serve_forever()
+PY
 }
 
 long_polling_step() {
     local offset_file="$CACHE_DIR/offset"
     local offset=0
     [[ -f "$offset_file" ]] && offset=$(cat "$offset_file")
+
     local updates
-    updates=$(curl -s --max-time 35 "${API}/getUpdates?offset=$offset&limit=1&timeout=30")
+    updates=$(curl -s --max-time 35 "${API}/getUpdates?offset=$offset&limit=10&timeout=30")
+
     if echo "$updates" | grep -q '"update_id"'; then
-        local upd_id
-        upd_id=$(echo "$updates" | grep -o '"update_id":[0-9]*' | head -1 | cut -d: -f2)
-        echo "$((upd_id + 1))" > "$offset_file"
-        process_update "$updates" &
+        local max_id
+        max_id=$(echo "$updates" | grep -o '"update_id":[0-9]*' | cut -d: -f2 | sort -n | tail -1)
+        echo "$((max_id + 1))" > "$offset_file"
+
+        python3 - <<'PY' "$updates" "$SCRIPT_PATH"
+import sys, json, subprocess
+raw = sys.argv[1]
+script = sys.argv[2]
+try:
+    obj = json.loads(raw)
+except Exception:
+    raise SystemExit(0)
+
+for item in obj.get("result", []):
+    subprocess.Popen([script, "--process-update"], stdin=subprocess.PIPE, text=True).communicate(json.dumps({"message": item.get("message", {})}))
+PY
     fi
 }
 
@@ -524,12 +779,17 @@ auto_restart() {
     if [[ "$USE_WEBHOOK" == "true" ]]; then
         curl -s "${API}/setWebhook?url=${BASE_URL}/webhook" >/dev/null
         msg "webhook_set"; echo " ${BASE_URL}/webhook"
-        while true; do http_server || sleep 5; done
+        export SCRIPT_PATH
+        python_http_server
     else
         curl -s "${API}/deleteWebhook" >/dev/null
-        msg "start_polling"
-        ( while true; do long_polling_step || sleep 5; done ) &
-        while true; do http_server || sleep 5; done
+        (
+            while true; do
+                long_polling_step || sleep 5
+            done
+        ) &
+        export SCRIPT_PATH
+        python_http_server
     fi
 }
 
@@ -556,6 +816,7 @@ WorkingDirectory=$(pwd)
 ExecStart=$(realpath "$0") --run-bot
 Restart=always
 RestartSec=5
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
@@ -563,7 +824,7 @@ EOF
 
     systemctl daemon-reload
     systemctl enable telegram-bot
-    systemctl start telegram-bot
+    systemctl restart telegram-bot
     msg "service_installed"
 }
 
@@ -608,7 +869,7 @@ init_runtime() {
     load_env_safe
     : "${BOT_TOKEN:?BOT_TOKEN not set}"
     : "${BASE_URL:?BASE_URL not set}"
-    : "${PORT:=80}"
+    : "${PORT:=8080}"
     : "${PREFIX:=}"
     : "${ALLOWED_USER_IDS:=}"
     : "${USE_WEBHOOK:=false}"
@@ -623,9 +884,11 @@ init_runtime() {
     CACHE_DIR="/tmp/tg_bot_cache"
     TEXT_BUFFER_DIR="/tmp/tg_text_buffer"
     FILE_CACHE_DIR="/tmp/tg_file_cache"
+    FILE_ID_MAP_DIR="/tmp/tg_file_id_map"
     TEXT_CACHE_DIR="/tmp/tg_text_cache"
-    TEXT_MAP_DIR="/tmp/tg_text_map"
-    mkdir -p "$CACHE_DIR" "$TEXT_BUFFER_DIR" "$FILE_CACHE_DIR" "$TEXT_CACHE_DIR" "$TEXT_MAP_DIR"
+
+    mkdir -p "$CACHE_DIR" "$TEXT_BUFFER_DIR" "$FILE_CACHE_DIR" "$FILE_ID_MAP_DIR" "$TEXT_CACHE_DIR"
+    SCRIPT_PATH="$(realpath "$0")"
 }
 
 show_detected_state() {
@@ -663,7 +926,6 @@ interactive_menu() {
                 0) exit 0 ;;
                 *) msg "invalid_choice" ;;
             esac
-
         elif service_is_active; then
             msg "menu_restart_service"
             msg "menu_stop_service"
@@ -681,7 +943,6 @@ interactive_menu() {
                 0) exit 0 ;;
                 *) msg "invalid_choice" ;;
             esac
-
         else
             msg "menu_start_service"
             msg "menu_restart_service_alt"
@@ -719,6 +980,32 @@ main() {
 if [[ "${1:-}" == "--run-bot" ]]; then
     init_runtime
     auto_restart
-else
-    main
+    exit 0
 fi
+
+if [[ "${1:-}" == "--process-update" ]]; then
+    init_runtime
+    body=$(cat)
+    process_update "$body"
+    exit 0
+fi
+
+if [[ "${1:-}" == "--serve" ]]; then
+    init_runtime
+    token="${2:-}"
+    ext="${3:-}"
+    [[ -n "$token" ]] || { safe_http_not_found; exit 0; }
+    data=$(decode_data "$token" || true)
+    if [[ "$data" == f\|* ]]; then
+        short_id=$(echo "$data" | cut -d'|' -f2)
+        serve_file_by_short_id "$short_id"
+    elif [[ "$data" == t\|* ]] && [[ "$ext" == "txt" ]]; then
+        text_id=$(echo "$data" | cut -d'|' -f2)
+        serve_text_by_id "$text_id"
+    else
+        safe_http_not_found
+    fi
+    exit 0
+fi
+
+main
