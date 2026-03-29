@@ -1,0 +1,423 @@
+#!/bin/bash
+
+# telegram-file-bot.sh - Universal Bot (Domain+HTTPS+Webhook OR IP+HTTP+Polling)
+
+set -euo pipefail
+
+# --- ИНТЕРНАЦИОНАЛИЗАЦИЯ / i18n ---
+LANG_SET="EN"
+
+msg() {
+    if [[ "$LANG_SET" == "RU" ]]; then
+        case "$1" in
+            "lang_prompt") echo -n "Выберите язык / Select language (1: EN, 2: RU) [2]: " ;;
+            "check_deps") echo "Проверка базовых зависимостей..." ;;
+            "dep_missing") echo "Утилита не найдена, устанавливаем:" ;;
+            "setup_start") echo "=== Умная настройка Telegram Бота ===" ;;
+            "ask_token") echo -n "Введите BOT_TOKEN (от @BotFather): " ;;
+            "ask_has_domain") echo -n "Есть ли у вас ДОМЕН, привязанный к этому серверу? (y/n) [y]: " ;;
+            "ask_domain") echo -n "Введите ваш ДОМЕН (например, example.com): " ;;
+            "ask_nginx") echo -n "Настроить Nginx и HTTPS (Let's Encrypt) автоматически? (y/n) [y]: " ;;
+            "detecting_ip") echo "Определяем IP адрес сервера..." ;;
+            "ask_ip") echo -n "Подтвердите IP сервера (Enter для использования $2): " ;;
+            "info_polling") echo "Домен не указан. Бот будет раздавать файлы по HTTP и работать в режиме Long Polling (без Webhook)." ;;
+            "ask_port") echo -n "На каком порту запустить раздачу файлов? [80]: " ;;
+            "ask_prefix") echo -n "Введите ПРЕФИКС для сообщений (необязательно, например 'Файл: '): " ;;
+            "ask_allowed") echo -n "Включить приватный режим (доступ только по вашему ID)? (y/n) [n]: " ;;
+            "listen_user") echo "Ожидание... Напишите ЛЮБОЕ сообщение вашему боту в Telegram прямо сейчас." ;;
+            "user_found") echo "Получено сообщение от" ;;
+            "ask_add_user") echo -n "Добавить этого пользователя в разрешенные? (y/n) [y]: " ;;
+            "ask_more_user") echo -n "Ожидать еще одного пользователя? (y/n) [n]: " ;;
+            "setup_done") echo "Настройка завершена! Конфигурация сохранена в .env" ;;
+            "webhook_set") echo "Webhook установлен на" ;;
+            "start_polling") echo "Запуск в режиме Long Polling..." ;;
+            "starting") echo "Бот запускается..." ;;
+            "need_root") echo "Для установки на порт 80 или настройки Nginx требуются права root. Запустите через sudo." ;;
+        esac
+    else
+        case "$1" in
+            "lang_prompt") echo -n "Select language / Выберите язык (1: EN, 2: RU) [1]: " ;;
+            "check_deps") echo "Checking base dependencies..." ;;
+            "dep_missing") echo "Utility missing, installing:" ;;
+            "setup_start") echo "=== Smart Telegram Bot Setup ===" ;;
+            "ask_token") echo -n "Enter BOT_TOKEN (from @BotFather): " ;;
+            "ask_has_domain") echo -n "Do you have a DOMAIN pointed to this server? (y/n) [y]: " ;;
+            "ask_domain") echo -n "Enter your DOMAIN (e.g., example.com): " ;;
+            "ask_nginx") echo -n "Configure Nginx and HTTPS (Let's Encrypt) automatically? (y/n) [y]: " ;;
+            "detecting_ip") echo "Detecting server IP address..." ;;
+            "ask_ip") echo -n "Confirm server IP (Press Enter to use $2): " ;;
+            "info_polling") echo "No domain provided. Bot will serve HTTP links and use Long Polling mode (no Webhook)." ;;
+            "ask_port") echo -n "Which port to run the file server on? [80]: " ;;
+            "ask_prefix") echo -n "Enter PREFIX for messages (optional, e.g. 'File: '): " ;;
+            "ask_allowed") echo -n "Enable private mode (restrict by User IDs)? (y/n) [n]: " ;;
+            "listen_user") echo "Waiting... Send ANY message to your bot in Telegram right now." ;;
+            "user_found") echo "Received message from" ;;
+            "ask_add_user") echo -n "Add this user to allowed list? (y/n) [y]: " ;;
+            "ask_more_user") echo -n "Wait for another user? (y/n) [n]: " ;;
+            "setup_done") echo "Setup complete! Configuration saved to .env" ;;
+            "webhook_set") echo "Webhook set to" ;;
+            "start_polling") echo "Starting in Long Polling mode..." ;;
+            "starting") echo "Starting bot..." ;;
+            "need_root") echo "Root privileges required for port 80 or Nginx. Run script with sudo." ;;
+        esac
+    fi
+}
+
+# Выбор языка
+if [[ ! -f .env ]]; then
+    read -p "$(msg 'lang_prompt')" lang_choice
+    [[ "$lang_choice" == "2" ]] && LANG_SET="RU"
+fi
+
+# Установка зависимостей
+check_base_deps() {
+    msg "check_deps"
+    for cmd in curl openssl nc; do
+        if ! command -v $cmd >/dev/null 2>&1; then
+            msg "dep_missing"; echo " $cmd"
+            if command -v apt-get >/dev/null 2>&1; then
+                sudo apt-get update && sudo apt-get install -y $cmd netcat-openbsd || exit 1
+            elif command -v yum >/dev/null 2>&1; then
+                sudo yum install -y $cmd nc || exit 1
+            else
+                exit 1
+            fi
+        fi
+    done
+}
+
+# --- МАСТЕР НАСТРОЙКИ ---
+setup_wizard() {
+    if [[ ! -f .env ]]; then
+        check_base_deps
+        echo ""
+        msg "setup_start"
+        
+        read -p "$(msg 'ask_token')" bot_token
+        
+        use_webhook="false"
+        base_url=""
+        bot_port=80
+        
+        read -p "$(msg 'ask_has_domain')" has_domain
+        if [[ -z "$has_domain" || "$has_domain" == "y" || "$has_domain" == "Y" || "$has_domain" == "д" || "$has_domain" == "Д" ]]; then
+            read -p "$(msg 'ask_domain')" raw_domain
+            raw_domain=$(echo "$raw_domain" | sed -e 's|^[^/]*//||' -e 's|/.*$||')
+            
+            read -p "$(msg 'ask_nginx')" setup_nginx
+            if [[ -z "$setup_nginx" || "$setup_nginx" == "y" || "$setup_nginx" == "Y" || "$setup_nginx" == "д" || "$setup_nginx" == "Д" ]]; then
+                [[ $EUID -ne 0 ]] && { msg "need_root"; exit 1; }
+                
+                if command -v apt-get >/dev/null 2>&1; then
+                    apt-get update && apt-get install -y nginx certbot python3-certbot-nginx
+                elif command -v yum >/dev/null 2>&1; then
+                    yum install -y epel-release && yum install -y nginx certbot python3-certbot-nginx
+                fi
+                
+                bot_port=8443
+                cat > "/etc/nginx/sites-available/$raw_domain" <<EOF
+server {
+    listen 80;
+    server_name $raw_domain;
+    location / {
+        proxy_pass http://127.0.0.1:$bot_port;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_buffering off;
+        proxy_read_timeout 86400;
+    }
+}
+EOF
+                ln -sf "/etc/nginx/sites-available/$raw_domain" /etc/nginx/sites-enabled/
+                rm -f /etc/nginx/sites-enabled/default
+                systemctl restart nginx
+                
+                certbot --nginx -d "$raw_domain" --non-interactive --agree-tos --register-unsafely-without-email || true
+                systemctl reload nginx
+                
+                use_webhook="true"
+                base_url="https://${raw_domain}"
+            else
+                read -p "$(msg 'ask_port')" bot_port
+                bot_port=${bot_port:-80}
+                use_webhook="true"
+                [[ "$bot_port" == "80" || "$bot_port" == "443" ]] && base_url="http://${raw_domain}" || base_url="http://${raw_domain}:${bot_port}"
+            fi
+        else
+            msg "info_polling"
+            msg "detecting_ip"
+            detected_ip=$(curl -s ifconfig.me || curl -s api.ipify.org || echo "127.0.0.1")
+            
+            read -p "$(msg 'ask_ip' "$detected_ip")" custom_ip
+            final_ip=${custom_ip:-$detected_ip}
+            
+            read -p "$(msg 'ask_port')" bot_port
+            bot_port=${bot_port:-80}
+            
+            use_webhook="false"
+            if [[ "$bot_port" == "80" ]]; then
+                base_url="http://${final_ip}"
+            else
+                base_url="http://${final_ip}:${bot_port}"
+            fi
+        fi
+        
+        read -p "$(msg 'ask_prefix')" prefix
+        allowed_ids=""
+
+        read -p "$(msg 'ask_allowed')" req_allow
+        if [[ "$req_allow" == "y" || "$req_allow" == "Y" || "$req_allow" == "д" || "$req_allow" == "Д" ]]; then
+            curl -s "https://api.telegram.org/bot${bot_token}/setWebhook?url=" >/dev/null
+            local offset=0
+            while true; do
+                echo ""; msg "listen_user"
+                local user_added=false
+                while [ "$user_added" = false ]; do
+                    updates=$(curl -s "https://api.telegram.org/bot${bot_token}/getUpdates?offset=$offset&timeout=5")
+                    if echo "$updates" | grep -q '"update_id"'; then
+                        upd_id=$(echo "$updates" | grep -o '"update_id":[0-9]*' | tail -1 | cut -d: -f2)
+                        u_id=$(echo "$updates" | grep -o '"from":{"id":[0-9]*' | tail -1 | cut -d: -f3)
+                        u_name=$(echo "$updates" | grep -o '"first_name":"[^"]*"' | tail -1 | cut -d'"' -f4 | sed 's/\\//g')
+                        
+                        offset=$((upd_id + 1))
+                        
+                        msg "user_found"; echo " ID: $u_id | Name: $u_name"
+                        read -p "$(msg 'ask_add_user')" add_u
+                        if [[ -z "$add_u" || "$add_u" == "y" || "$add_u" == "Y" || "$add_u" == "д" || "$add_u" == "Д" ]]; then
+                            [[ -z "$allowed_ids" ]] && allowed_ids="$u_id" || allowed_ids="$allowed_ids,$u_id"
+                        fi
+                        user_added=true
+                    fi
+                    sleep 1
+                done
+                
+                read -p "$(msg 'ask_more_user')" more_u
+                [[ "$more_u" != "y" && "$more_u" != "Y" && "$more_u" != "д" && "$more_u" != "Д" ]] && break
+            done
+        fi
+
+        cat > .env <<EOF
+BOT_TOKEN=$bot_token
+BASE_URL=$base_url
+PORT=$bot_port
+PREFIX="$prefix"
+ALLOWED_USER_IDS="$allowed_ids"
+USE_WEBHOOK=$use_webhook
+EOF
+        echo ""; msg "setup_done"; echo "-----------------------------------"
+    fi
+}
+
+setup_wizard
+
+# Загрузка переменных
+export $(grep -v '^#' .env | xargs)
+
+: "${BOT_TOKEN:?BOT_TOKEN not set}"
+: "${BASE_URL:?BASE_URL not set}"
+: "${PORT:=80}"
+: "${PREFIX:=}"
+: "${ALLOWED_USER_IDS:=}"
+: "${USE_WEBHOOK:=false}"
+
+# Ключ шифрования
+SECRET_KEY_FILE=".secret_key"
+if [[ ! -f "$SECRET_KEY_FILE" ]]; then
+    openssl rand -hex 32 > "$SECRET_KEY_FILE"
+    chmod 600 "$SECRET_KEY_FILE"
+fi
+SECRET_KEY=$(cat "$SECRET_KEY_FILE")
+
+API="https://api.telegram.org/bot${BOT_TOKEN}"
+CACHE_DIR="/tmp/tg_bot_cache"
+TEXT_BUFFER_DIR="/tmp/tg_text_buffer"
+mkdir -p "$CACHE_DIR" "$TEXT_BUFFER_DIR"
+
+encode_data() { echo -n "$1" | openssl enc -aes-256-cbc -a -A -pbkdf2 -pass pass:"$SECRET_KEY" 2>/dev/null | tr '+/' '-_' | tr -d '='; }
+decode_data() {
+    local padded=$(echo -n "$1" | tr '_-' '/+')
+    local mod=$((${#padded} % 4))
+    [[ $mod -gt 0 ]] && padded="${padded}$(printf '=%.0s' $(seq 1 $((4 - mod))))"
+    echo -n "$padded" | openssl enc -aes-256-cbc -d -a -A -pbkdf2 -pass pass:"$SECRET_KEY" 2>/dev/null
+}
+
+handle_file() {
+    local chat_id="$1" file_id="$2" ext="$3"
+    local encoded=$(encode_data "file|${file_id}")
+    local message="${PREFIX}${BASE_URL}/file/${encoded}.${ext}"
+    curl -s -X POST "${API}/sendMessage" -d "chat_id=${chat_id}" -d "text=${message}" >/dev/null
+}
+
+handle_text() {
+    local chat_id="$1" msg_id="$2" user_id="$3"
+    local buffer_file="${TEXT_BUFFER_DIR}/${chat_id}_${user_id}"
+    echo "$msg_id" >> "$buffer_file"
+    (
+        sleep 2
+        [[ ! -f "$buffer_file" ]] && exit
+        local msg_ids=$(cat "$buffer_file" | tr '\n' ',' | sed 's/,$//')
+        rm -f "$buffer_file"
+        
+        local encoded=$(encode_data "txt|${chat_id}|${msg_ids}")
+        local message="${PREFIX}${BASE_URL}/file/${encoded}.txt"
+        curl -s -X POST "${API}/sendMessage" -d "chat_id=${chat_id}" -d "text=${message}" >/dev/null
+    ) &
+}
+
+process_update() {
+    local json="$1"
+    local chat_id=$(echo "$json" | grep -o '"chat":{"id":[^,]*' | grep -o '[0-9-]*$' || true)
+    local user_id=$(echo "$json" | grep -o '"from":{"id":[^,]*' | grep -o '[0-9]*$' || true)
+    local msg_id=$(echo "$json" | grep -o '"message_id":[^,]*' | grep -o '[0-9]*$' || true)
+    
+    [[ -z "$chat_id" ]] && return
+    
+    if [[ -n "$ALLOWED_USER_IDS" ]] && ! [[ ",${ALLOWED_USER_IDS}," == *",${user_id},"* ]]; then return; fi
+    
+    if echo "$json" | grep -q '"document"'; then
+        local file_id=$(echo "$json" | grep -o '"document":{"file_id":"[^"]*"' | cut -d'"' -f6)
+        local fname=$(echo "$json" | grep -o '"file_name":"[^"]*"' | cut -d'"' -f4)
+        local ext="${fname##*.}"
+        [[ "$ext" == "$fname" ]] && ext="bin"
+        handle_file "$chat_id" "$file_id" "$ext"
+    elif echo "$json" | grep -q '"photo":\['; then
+        local file_id=$(echo "$json" | grep -o '"file_id":"[^"]*"' | tail -1 | cut -d'"' -f4)
+        handle_file "$chat_id" "$file_id" "jpg"
+    elif echo "$json" | grep -q '"video"'; then
+        local file_id=$(echo "$json" | grep -o '"video":{"file_id":"[^"]*"' | cut -d'"' -f6)
+        handle_file "$chat_id" "$file_id" "mp4"
+    elif echo "$json" | grep -q '"text"'; then
+        handle_text "$chat_id" "$msg_id" "$user_id"
+    fi
+}
+
+serve_file() {
+    local encoded="$1"
+    local data=$(decode_data "$encoded")
+    
+    if [[ "$data" == txt\|* ]]; then
+        local chat_id=$(echo "$data" | cut -d'|' -f2)
+        local msg_ids=$(echo "$data" | cut -d'|' -f3)
+        local cache_file="$CACHE_DIR/${encoded}.txt"
+        
+        if [[ -f "$cache_file" ]] && [[ $(($(date +%s) - $(stat -c %Y "$cache_file" 2>/dev/null || stat -f %m "$cache_file"))) -lt 3600 ]]; then
+            cat "$cache_file"; return
+        fi
+        
+        local text=""
+        IFS=',' read -ra IDS <<< "$msg_ids"
+        for mid in "${IDS[@]}"; do
+            local resp=$(curl -s "${API}/getUpdates?offset=${mid}&limit=1" 2>/dev/null || curl -s "${API}/forwardMessage?chat_id=${chat_id}&from_chat_id=${chat_id}&message_id=${mid}" 2>/dev/null)
+            text="${text}$(echo "$resp" | grep -o '"text":"[^"]*"' | cut -d'"' -f4 | sed 's/\\n//g')"
+        done
+        echo -n "$text" | tee "$cache_file"
+        return
+    fi
+    
+    if [[ "$data" == file\|* ]]; then
+        local file_id=$(echo "$data" | cut -d'|' -f2)
+        local response=$(curl -s "${API}/getFile?file_id=${file_id}")
+        local file_path=$(echo "$response" | grep -o '"file_path":"[^"]*"' | cut -d'"' -f4)
+        local url="https://api.telegram.org/file/bot${BOT_TOKEN}/${file_path}"
+        
+        local headers=$(curl -s -I "$url")
+        local clen=$(echo "$headers" | grep -i '^content-length:' | tr -d '\r' || true)
+        local ctype=$(echo "$headers" | grep -i '^content-type:' | tr -d '\r' || true)
+        
+        echo -e "HTTP/1.1 200 OK\r\n${ctype}\r\n${clen}\r\n\r"
+        curl -s "$url"
+    fi
+}
+
+# HTTP Сервер для отдачи файлов (и вебхука, если включен)
+http_server() {
+    while true; do
+        {
+            read -r method path proto || exit 0
+            while read -r header; do [[ "$header" == $'\r' ]] && break; done
+            
+            local body=""
+            if [[ "$method" == "POST" ]]; then
+                while IFS= read -r -n1 char; do body="${body}${char}"; [[ "$body" == *\}\}* ]] && break; done
+            fi
+            
+            if [[ "$path" =~ ^/webhook ]] && [[ "$USE_WEBHOOK" == "true" ]]; then
+                process_update "$body" &
+                echo -e "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK"
+            elif [[ "$path" =~ ^/file/([^.]+)\.(.+)$ ]]; then
+                local encoded="${BASH_REMATCH[1]}"
+                if [[ "${BASH_REMATCH[2]}" == "txt" ]]; then
+                    local content=$(serve_file "$encoded" 2>/dev/null)
+                    [[ -n "$content" ]] && echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${#content}\r\n\r\n${content}" || echo -e "HTTP/1.1 404 Not Found\r\n\r\n"
+                else
+                    serve_file "$encoded" 2>/dev/null
+                fi
+            else
+                echo -e "HTTP/1.1 404 Not Found\r\n\r\n"
+            fi
+        } | nc -l "$PORT"
+    done
+}
+
+# Режим Long Polling (Опрос Telegram)
+long_polling_step() {
+    local offset_file="$CACHE_DIR/offset"
+    local offset=0
+    [[ -f "$offset_file" ]] && offset=$(cat "$offset_file")
+    
+    local updates=$(curl -s --max-time 35 "${API}/getUpdates?offset=$offset&limit=1&timeout=30")
+    if echo "$updates" | grep -q '"update_id"'; then
+        local upd_id=$(echo "$updates" | grep -o '"update_id":[0-9]*' | head -1 | cut -d: -f2)
+        echo "$((upd_id + 1))" > "$offset_file"
+        process_update "$updates" &
+    fi
+}
+
+auto_restart() {
+    msg "starting"
+    if [[ "$USE_WEBHOOK" == "true" ]]; then
+        curl -s "${API}/setWebhook?url=${BASE_URL}/webhook" >/dev/null
+        msg "webhook_set"; echo " ${BASE_URL}/webhook"
+        while true; do http_server || sleep 5; done
+    else
+        curl -s "${API}/deleteWebhook" >/dev/null
+        msg "start_polling"
+        ( while true; do long_polling_step || sleep 5; done ) &
+        while true; do http_server || sleep 5; done
+    fi
+}
+
+case "${1:-start}" in
+    start)
+        auto_restart
+        ;;
+    install)
+        [[ $EUID -ne 0 ]] && { echo "Запустите: sudo bash $0 install"; exit 1; }
+        
+        cat > /etc/systemd/system/telegram-bot.service <<EOF
+[Unit]
+Description=Telegram File Sharing Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$(pwd)
+ExecStart=$(realpath "$0") start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload
+        systemctl enable telegram-bot
+        systemctl start telegram-bot
+        echo "✅ Установлено как служба: telegram-bot"
+        echo "Проверить статус: systemctl status telegram-bot"
+        ;;
+    *)
+        echo "Usage: $0 {start|install}"
+        exit 1
+        ;;
+esac
