@@ -1,12 +1,5 @@
 #!/bin/bash
 
-# telegram-file-bot.sh - Universal Bot (Domain+HTTPS+Webhook OR IP+HTTP+Polling)
-# Interactive mode:
-# - always asks language first
-# - detects config/service state automatically
-# - if not configured -> runs setup immediately
-# - if configured -> shows suitable menu depending on service state
-
 set -euo pipefail
 
 LANG_SET="EN"
@@ -26,7 +19,7 @@ msg() {
             "ask_ip") echo -n "Подтвердите IP сервера (Enter для использования $2): " ;;
             "info_polling") echo "Домен не указан. Бот будет раздавать файлы по HTTP и работать в режиме Long Polling (без Webhook)." ;;
             "ask_port") echo -n "На каком порту запустить раздачу файлов? [80]: " ;;
-            "ask_prefix") echo -n "Введите ПРЕФИКС для сообщений (необязательно, например 'Файл: '): " ;;
+            "ask_prefix") echo -n "Введите ПРЕФИКС для сообщений (необязательно): " ;;
             "ask_allowed") echo -n "Включить приватный режим (доступ только по вашему ID)? (y/n) [n]: " ;;
             "listen_user") echo "Ожидание... Напишите ЛЮБОЕ сообщение вашему боту в Telegram прямо сейчас." ;;
             "user_found") echo "Получено сообщение от" ;;
@@ -43,19 +36,19 @@ msg() {
             "state_service_inactive") echo "Systemd-служба telegram-bot: УСТАНОВЛЕНА, НО НЕ ЗАПУЩЕНА" ;;
             "state_service_missing") echo "Systemd-служба telegram-bot: НЕ УСТАНОВЛЕНА" ;;
             "menu_choose_action") echo "Выберите действие:" ;;
-            "menu_start_now") echo "1) Запустить бота сейчас в текущей сессии" ;;
+            "menu_install_and_start") echo "1) Установить и запустить systemd-службу" ;;
+            "menu_start_service") echo "1) Запустить systemd-службу" ;;
+            "menu_restart_service") echo "1) Перезапустить systemd-службу" ;;
+            "menu_stop_service") echo "2) Остановить systemd-службу" ;;
             "menu_reconfigure") echo "2) Перенастроить бота" ;;
-            "menu_install_service") echo "3) Установить как systemd-службу" ;;
-            "menu_start_service") echo "4) Запустить systemd-службу" ;;
-            "menu_restart_service") echo "5) Перезапустить systemd-службу" ;;
-            "menu_stop_service") echo "6) Остановить systemd-службу" ;;
+            "menu_reconfigure_alt") echo "3) Перенастроить бота" ;;
+            "menu_restart_service_alt") echo "2) Перезапустить systemd-службу" ;;
             "menu_show_status") echo "7) Показать статус службы" ;;
             "menu_show_logs") echo "8) Показать логи службы" ;;
             "menu_exit") echo "0) Выход" ;;
             "menu_prompt") echo -n "Введите номер действия: " ;;
             "invalid_choice") echo "Неверный выбор." ;;
             "service_installed") echo "✅ Установлено как служба: telegram-bot" ;;
-            "service_status_hint") echo "Проверить статус: systemctl status telegram-bot" ;;
             "service_started") echo "Служба запущена." ;;
             "service_restart_done") echo "Служба перезапущена." ;;
             "service_stop_done") echo "Служба остановлена." ;;
@@ -63,7 +56,6 @@ msg() {
             "press_enter") echo -n "Нажмите Enter для продолжения..." ;;
             "reconfig_done") echo "Старая конфигурация удалена. Запускаем настройку..." ;;
             "must_use_sudo") echo "Для этой операции нужны права root. Запустите через sudo." ;;
-            "starting_runtime") echo "Запуск бота в текущей сессии..." ;;
         esac
     else
         case "$1" in
@@ -79,7 +71,7 @@ msg() {
             "ask_ip") echo -n "Confirm server IP (Press Enter to use $2): " ;;
             "info_polling") echo "No domain provided. Bot will serve HTTP links and use Long Polling mode (no Webhook)." ;;
             "ask_port") echo -n "Which port to run the file server on? [80]: " ;;
-            "ask_prefix") echo -n "Enter PREFIX for messages (optional, e.g. 'File: '): " ;;
+            "ask_prefix") echo -n "Enter PREFIX for messages (optional): " ;;
             "ask_allowed") echo -n "Enable private mode (restrict by User IDs)? (y/n) [n]: " ;;
             "listen_user") echo "Waiting... Send ANY message to your bot in Telegram right now." ;;
             "user_found") echo "Received message from" ;;
@@ -96,19 +88,19 @@ msg() {
             "state_service_inactive") echo "Systemd service telegram-bot: INSTALLED BUT NOT RUNNING" ;;
             "state_service_missing") echo "Systemd service telegram-bot: NOT INSTALLED" ;;
             "menu_choose_action") echo "Choose action:" ;;
-            "menu_start_now") echo "1) Start bot now in current session" ;;
+            "menu_install_and_start") echo "1) Install and start systemd service" ;;
+            "menu_start_service") echo "1) Start systemd service" ;;
+            "menu_restart_service") echo "1) Restart systemd service" ;;
+            "menu_stop_service") echo "2) Stop systemd service" ;;
             "menu_reconfigure") echo "2) Reconfigure bot" ;;
-            "menu_install_service") echo "3) Install as systemd service" ;;
-            "menu_start_service") echo "4) Start systemd service" ;;
-            "menu_restart_service") echo "5) Restart systemd service" ;;
-            "menu_stop_service") echo "6) Stop systemd service" ;;
+            "menu_reconfigure_alt") echo "3) Reconfigure bot" ;;
+            "menu_restart_service_alt") echo "2) Restart systemd service" ;;
             "menu_show_status") echo "7) Show service status" ;;
             "menu_show_logs") echo "8) Show service logs" ;;
             "menu_exit") echo "0) Exit" ;;
             "menu_prompt") echo -n "Enter action number: " ;;
             "invalid_choice") echo "Invalid choice." ;;
             "service_installed") echo "✅ Installed as service: telegram-bot" ;;
-            "service_status_hint") echo "Check status: systemctl status telegram-bot" ;;
             "service_started") echo "Service started." ;;
             "service_restart_done") echo "Service restarted." ;;
             "service_stop_done") echo "Service stopped." ;;
@@ -116,18 +108,13 @@ msg() {
             "press_enter") echo -n "Press Enter to continue..." ;;
             "reconfig_done") echo "Old configuration removed. Starting setup..." ;;
             "must_use_sudo") echo "Root privileges required for this operation. Run with sudo." ;;
-            "starting_runtime") echo "Starting bot in current session..." ;;
         esac
     fi
 }
 
 choose_language() {
     read -p "$(msg 'lang_prompt')" lang_choice
-    if [[ "$lang_choice" == "2" ]]; then
-        LANG_SET="RU"
-    else
-        LANG_SET="EN"
-    fi
+    [[ "$lang_choice" == "2" ]] && LANG_SET="RU" || LANG_SET="EN"
 }
 
 check_base_deps() {
@@ -150,28 +137,28 @@ setup_wizard() {
     check_base_deps
     echo ""
     msg "setup_start"
-    
+
     read -p "$(msg 'ask_token')" bot_token
-    
+
     use_webhook="false"
     base_url=""
     bot_port=80
-    
+
     read -p "$(msg 'ask_has_domain')" has_domain
     if [[ -z "$has_domain" || "$has_domain" == "y" || "$has_domain" == "Y" || "$has_domain" == "д" || "$has_domain" == "Д" ]]; then
         read -p "$(msg 'ask_domain')" raw_domain
         raw_domain=$(echo "$raw_domain" | sed -e 's|^[^/]*//||' -e 's|/.*$||')
-        
+
         read -p "$(msg 'ask_nginx')" setup_nginx
         if [[ -z "$setup_nginx" || "$setup_nginx" == "y" || "$setup_nginx" == "Y" || "$setup_nginx" == "д" || "$setup_nginx" == "Д" ]]; then
             [[ $EUID -ne 0 ]] && { msg "need_root"; exit 1; }
-            
+
             if command -v apt-get >/dev/null 2>&1; then
                 apt-get update && apt-get install -y nginx certbot python3-certbot-nginx
             elif command -v yum >/dev/null 2>&1; then
                 yum install -y epel-release && yum install -y nginx certbot python3-certbot-nginx
             fi
-            
+
             bot_port=8443
             mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
             cat > "/etc/nginx/sites-available/$raw_domain" <<EOF
@@ -190,10 +177,10 @@ EOF
             ln -sf "/etc/nginx/sites-available/$raw_domain" /etc/nginx/sites-enabled/
             rm -f /etc/nginx/sites-enabled/default
             systemctl restart nginx || true
-            
+
             certbot --nginx -d "$raw_domain" --non-interactive --agree-tos --register-unsafely-without-email || true
             systemctl reload nginx || true
-            
+
             use_webhook="true"
             base_url="https://${raw_domain}"
         else
@@ -206,13 +193,13 @@ EOF
         msg "info_polling"
         msg "detecting_ip"
         detected_ip=$(curl -s ifconfig.me || curl -s api.ipify.org || echo "127.0.0.1")
-        
+
         read -p "$(msg 'ask_ip' "$detected_ip")" custom_ip
         final_ip=${custom_ip:-$detected_ip}
-        
+
         read -p "$(msg 'ask_port')" bot_port
         bot_port=${bot_port:-80}
-        
+
         use_webhook="false"
         if [[ "$bot_port" == "80" ]]; then
             base_url="http://${final_ip}"
@@ -220,7 +207,7 @@ EOF
             base_url="http://${final_ip}:${bot_port}"
         fi
     fi
-    
+
     read -p "$(msg 'ask_prefix')" prefix
     allowed_ids=""
 
@@ -229,7 +216,8 @@ EOF
         curl -s "https://api.telegram.org/bot${bot_token}/setWebhook?url=" >/dev/null
         local offset=0
         while true; do
-            echo ""; msg "listen_user"
+            echo ""
+            msg "listen_user"
             local user_added=false
             while [ "$user_added" = false ]; do
                 updates=$(curl -s "https://api.telegram.org/bot${bot_token}/getUpdates?offset=$offset&timeout=5")
@@ -237,9 +225,9 @@ EOF
                     upd_id=$(echo "$updates" | grep -o '"update_id":[0-9]*' | tail -1 | cut -d: -f2)
                     u_id=$(echo "$updates" | grep -o '"from":{"id":[0-9]*' | tail -1 | cut -d: -f3)
                     u_name=$(echo "$updates" | grep -o '"first_name":"[^"]*"' | tail -1 | cut -d'"' -f4 | sed 's/\\//g')
-                    
+
                     offset=$((upd_id + 1))
-                    
+
                     msg "user_found"; echo " ID: $u_id | Name: $u_name"
                     read -p "$(msg 'ask_add_user')" add_u
                     if [[ -z "$add_u" || "$add_u" == "y" || "$add_u" == "Y" || "$add_u" == "д" || "$add_u" == "Д" ]]; then
@@ -249,7 +237,7 @@ EOF
                 fi
                 sleep 1
             done
-            
+
             read -p "$(msg 'ask_more_user')" more_u
             [[ "$more_u" != "y" && "$more_u" != "Y" && "$more_u" != "д" && "$more_u" != "Д" ]] && break
         done
@@ -263,6 +251,7 @@ PREFIX="$prefix"
 ALLOWED_USER_IDS="$allowed_ids"
 USE_WEBHOOK=$use_webhook
 EOF
+
     echo ""
     msg "setup_done"
     echo "-----------------------------------"
@@ -271,7 +260,6 @@ EOF
 load_env_safe() {
     [[ -f .env ]] || return 1
     set -a
-    # shellcheck disable=SC1091
     source ./.env
     set +a
 }
@@ -295,10 +283,7 @@ save_file_cache() {
     local file_id="$1"
     local ext="$2"
     local file_path="$3"
-    local cache_file
-    cache_file=$(file_cache_path "$file_id")
-
-    cat > "$cache_file" <<EOF
+    cat > "$(file_cache_path "$file_id")" <<EOF
 FILE_ID=$file_id
 EXT=$ext
 FILE_PATH=$file_path
@@ -312,28 +297,23 @@ load_file_cache() {
     local cache_file
     cache_file=$(file_cache_path "$file_id")
     [[ -f "$cache_file" ]] || return 1
-    # shellcheck disable=SC1090
     source "$cache_file"
 }
 
 direct_url_valid() {
     local url="$1"
     [[ -z "$url" ]] && return 1
-
     local code
     code=$(curl -s -L -r 0-0 -o /dev/null -w "%{http_code}" --max-time 15 "$url" || echo 000)
-
     [[ "$code" == "200" || "$code" == "206" ]]
 }
 
 refresh_file_cache() {
     local file_id="$1"
     local ext="$2"
-
     local response file_path
     response=$(curl -s "${API}/getFile?file_id=${file_id}")
     file_path=$(echo "$response" | grep -o '"file_path":"[^"]*"' | cut -d'"' -f4)
-
     [[ -n "$file_path" ]] || return 1
     save_file_cache "$file_id" "$ext" "$file_path"
 }
@@ -357,9 +337,7 @@ extract_json_text_field() {
 
 handle_file() {
     local chat_id="$1" file_id="$2" ext="$3"
-
     refresh_file_cache "$file_id" "$ext" >/dev/null 2>&1 || true
-
     local encoded
     encoded=$(encode_data "file|${file_id}|${ext}")
     local message="${PREFIX}${BASE_URL}/file/${encoded}.${ext}"
@@ -375,22 +353,16 @@ handle_text() {
     (
         sleep 2
         [[ ! -f "$buffer_file" ]] && exit 0
-
         local lock_dir="${buffer_file}.lock"
         mkdir "$lock_dir" 2>/dev/null || exit 0
-
         local joined_text
         joined_text=$(tr -d '\n' < "$buffer_file")
         rm -f "$buffer_file"
         rmdir "$lock_dir" 2>/dev/null || true
-
         [[ -z "$joined_text" ]] && exit 0
-
         cleanup_text_cache
-
         local text_id
         text_id=$(openssl rand -hex 12)
-
         printf '%s' "$joined_text" > "$(text_cache_path "$text_id")"
         cat > "$(text_map_path "$text_id")" <<EOF
 CHAT_ID=$chat_id
@@ -398,7 +370,6 @@ USER_ID=$user_id
 MSG_ID=$msg_id
 CREATED_AT=$(date +%s)
 EOF
-
         local encoded
         encoded=$(encode_data "txt|${text_id}")
         local message="${PREFIX}${BASE_URL}/file/${encoded}.txt"
@@ -408,24 +379,18 @@ EOF
 
 process_update() {
     local json="$1"
-    local chat_id
-    local user_id
-    local msg_id
-
+    local chat_id user_id msg_id
     chat_id=$(echo "$json" | grep -o '"chat":{"id":[^,]*' | grep -o '[0-9-]*$' || true)
     user_id=$(echo "$json" | grep -o '"from":{"id":[^,]*' | grep -o '[0-9]*$' || true)
     msg_id=$(echo "$json" | grep -o '"message_id":[^,]*' | grep -o '[0-9]*$' || true)
-    
+
     [[ -z "$chat_id" ]] && return
-    
     if [[ -n "${ALLOWED_USER_IDS:-}" ]] && ! [[ ",${ALLOWED_USER_IDS}," == *",${user_id},"* ]]; then
         return
     fi
-    
+
     if echo "$json" | grep -q '"document"'; then
-        local file_id
-        local fname
-        local ext
+        local file_id fname ext
         file_id=$(echo "$json" | grep -o '"document":{"file_id":"[^"]*"' | cut -d'"' -f6)
         fname=$(echo "$json" | grep -o '"file_name":"[^"]*"' | cut -d'"' -f4)
         ext="${fname##*.}"
@@ -450,30 +415,24 @@ serve_file() {
     local encoded="$1"
     local data
     data=$(decode_data "$encoded")
-    
+
     if [[ "$data" == txt\|* ]]; then
-        local text_id
+        local text_id cache_file content
         text_id=$(echo "$data" | cut -d'|' -f2)
-        local cache_file
         cache_file="$(text_cache_path "$text_id")"
-
         cleanup_text_cache
-
-        if [[ -f "$cache_file" ]]; then
-            cat "$cache_file"
-            return
-        fi
+        [[ -f "$cache_file" ]] || return
+        content=$(cat "$cache_file")
+        printf "HTTP/1.1 200 OK\r\n"
+        printf "Content-Type: text/plain; charset=utf-8\r\n"
+        printf "Content-Length: %s\r\n" "${#content}"
+        printf "Connection: close\r\n\r\n"
+        printf "%s" "$content"
         return
     fi
-    
-    if [[ "$data" == file\|* ]]; then
-        local file_id
-        local ext
-        local url=""
-        local headers
-        local clen
-        local ctype
 
+    if [[ "$data" == file\|* ]]; then
+        local file_id ext url="" headers clen ctype
         file_id=$(echo "$data" | cut -d'|' -f2)
         ext=$(echo "$data" | cut -d'|' -f3)
         [[ -z "$ext" ]] && ext="bin"
@@ -486,10 +445,9 @@ serve_file() {
 
         if [[ -z "$url" ]]; then
             refresh_file_cache "$file_id" "$ext" >/dev/null 2>&1 || {
-                echo -e "HTTP/1.1 404 Not Found\r\n\r\n"
+                printf "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
                 return
             }
-
             if load_file_cache "$file_id" 2>/dev/null; then
                 if direct_url_valid "${DIRECT_URL:-}"; then
                     url="$DIRECT_URL"
@@ -497,16 +455,21 @@ serve_file() {
             fi
         fi
 
-        [[ -z "$url" ]] && { echo -e "HTTP/1.1 404 Not Found\r\n\r\n"; return; }
+        [[ -z "$url" ]] && { printf "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"; return; }
 
         headers=$(curl -s -I --max-time 15 "$url")
         clen=$(echo "$headers" | grep -i '^content-length:' | tr -d '\r' || true)
         ctype=$(echo "$headers" | grep -i '^content-type:' | tr -d '\r' || true)
 
-        echo -e "HTTP/1.1 200 OK\r\n${ctype}\r\n${clen}\r\n\r"
+        printf "HTTP/1.1 200 OK\r\n"
+        [[ -n "$ctype" ]] && printf "%s\r\n" "$ctype"
+        [[ -n "$clen" ]] && printf "%s\r\n" "$clen"
+        printf "Connection: close\r\n\r\n"
         curl -s "$url"
         return
     fi
+
+    printf "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
 }
 
 http_server() {
@@ -523,26 +486,20 @@ http_server() {
                     content_length=$(echo "$header" | awk '{print $2}' | tr -d '\r')
                 fi
             done
-            
+
             body=""
             if [[ "$method" == "POST" && "$content_length" -gt 0 ]]; then
                 body=$(dd bs=1 count="$content_length" 2>/dev/null || true)
             fi
-            
+
             if [[ "$path" =~ ^/webhook ]] && [[ "$USE_WEBHOOK" == "true" ]]; then
                 process_update "$body" &
-                echo -e "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK"
+                printf "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"
             elif [[ "$path" =~ ^/file/([^.]+)\.(.+)$ ]]; then
                 local encoded="${BASH_REMATCH[1]}"
-                if [[ "${BASH_REMATCH[2]}" == "txt" ]]; then
-                    local content
-                    content=$(serve_file "$encoded" 2>/dev/null || true)
-                    [[ -n "$content" ]] && echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${#content}\r\n\r\n${content}" || echo -e "HTTP/1.1 404 Not Found\r\n\r\n"
-                else
-                    serve_file "$encoded" 2>/dev/null
-                fi
+                serve_file "$encoded" 2>/dev/null || printf "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
             else
-                echo -e "HTTP/1.1 404 Not Found\r\n\r\n"
+                printf "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
             fi
         } | nc -l "$PORT"
     done
@@ -552,7 +509,6 @@ long_polling_step() {
     local offset_file="$CACHE_DIR/offset"
     local offset=0
     [[ -f "$offset_file" ]] && offset=$(cat "$offset_file")
-    
     local updates
     updates=$(curl -s --max-time 35 "${API}/getUpdates?offset=$offset&limit=1&timeout=30")
     if echo "$updates" | grep -q '"update_id"'; then
@@ -577,6 +533,14 @@ auto_restart() {
     fi
 }
 
+service_exists() {
+    systemctl cat telegram-bot >/dev/null 2>&1
+}
+
+service_is_active() {
+    systemctl is-active --quiet telegram-bot 2>/dev/null
+}
+
 install_service() {
     [[ $EUID -ne 0 ]] && { msg "must_use_sudo"; exit 1; }
 
@@ -589,7 +553,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=$(pwd)
-ExecStart=$(realpath "$0")
+ExecStart=$(realpath "$0") --run-bot
 Restart=always
 RestartSec=5
 
@@ -601,15 +565,6 @@ EOF
     systemctl enable telegram-bot
     systemctl start telegram-bot
     msg "service_installed"
-    msg "service_status_hint"
-}
-
-service_exists() {
-    systemctl status telegram-bot >/dev/null 2>&1 || systemctl cat telegram-bot >/dev/null 2>&1
-}
-
-service_is_active() {
-    systemctl is-active --quiet telegram-bot 2>/dev/null
 }
 
 start_service() {
@@ -694,125 +649,55 @@ interactive_menu() {
         msg "menu_choose_action"
 
         if ! service_exists; then
-            msg "menu_start_now"
+            msg "menu_install_and_start"
             msg "menu_reconfigure"
-            msg "menu_install_service"
             msg "menu_show_status"
             msg "menu_show_logs"
             msg "menu_exit"
             read -p "$(msg 'menu_prompt')" action
-
             case "$action" in
-                1)
-                    init_runtime
-                    msg "starting_runtime"
-                    auto_restart
-                    ;;
-                2)
-                    reconfigure_bot
-                    init_runtime
-                    ;;
-                3)
-                    install_service
-                    ;;
-                7)
-                    show_status
-                    read -r -p "$(msg 'press_enter')" _
-                    ;;
-                8)
-                    show_logs
-                    read -r -p "$(msg 'press_enter')" _
-                    ;;
-                0)
-                    exit 0
-                    ;;
-                *)
-                    msg "invalid_choice"
-                    ;;
+                1) install_service ;;
+                2) reconfigure_bot ;;
+                7) show_status; read -r -p "$(msg 'press_enter')" _ ;;
+                8) show_logs; read -r -p "$(msg 'press_enter')" _ ;;
+                0) exit 0 ;;
+                *) msg "invalid_choice" ;;
             esac
 
         elif service_is_active; then
             msg "menu_restart_service"
             msg "menu_stop_service"
+            msg "menu_reconfigure_alt"
             msg "menu_show_status"
             msg "menu_show_logs"
-            msg "menu_reconfigure"
-            msg "menu_start_now"
             msg "menu_exit"
             read -p "$(msg 'menu_prompt')" action
-
             case "$action" in
-                5)
-                    restart_service
-                    ;;
-                6)
-                    stop_service
-                    ;;
-                7)
-                    show_status
-                    read -r -p "$(msg 'press_enter')" _
-                    ;;
-                8)
-                    show_logs
-                    read -r -p "$(msg 'press_enter')" _
-                    ;;
-                2)
-                    reconfigure_bot
-                    init_runtime
-                    ;;
-                1)
-                    init_runtime
-                    msg "starting_runtime"
-                    auto_restart
-                    ;;
-                0)
-                    exit 0
-                    ;;
-                *)
-                    msg "invalid_choice"
-                    ;;
+                1) restart_service ;;
+                2) stop_service ;;
+                3) reconfigure_bot ;;
+                7) show_status; read -r -p "$(msg 'press_enter')" _ ;;
+                8) show_logs; read -r -p "$(msg 'press_enter')" _ ;;
+                0) exit 0 ;;
+                *) msg "invalid_choice" ;;
             esac
 
         else
             msg "menu_start_service"
-            msg "menu_restart_service"
+            msg "menu_restart_service_alt"
+            msg "menu_reconfigure_alt"
             msg "menu_show_status"
             msg "menu_show_logs"
-            msg "menu_reconfigure"
-            msg "menu_start_now"
             msg "menu_exit"
             read -p "$(msg 'menu_prompt')" action
-
             case "$action" in
-                4)
-                    start_service
-                    ;;
-                5)
-                    restart_service
-                    ;;
-                7)
-                    show_status
-                    read -r -p "$(msg 'press_enter')" _
-                    ;;
-                8)
-                    show_logs
-                    read -r -p "$(msg 'press_enter')" _
-                    ;;
-                2)
-                    reconfigure_bot
-                    init_runtime
-                    ;;
-                1)
-                    init_runtime
-                    msg "starting_runtime"
-                    auto_restart
-                    ;;
-                0)
-                    exit 0
-                    ;;
-                *)
-                    msg "invalid_choice"
-                    ;;
+                1) start_service ;;
+                2) restart_service ;;
+                3) reconfigure_bot ;;
+                7) show_status; read -r -p "$(msg 'press_enter')" _ ;;
+                8) show_logs; read -r -p "$(msg 'press_enter')" _ ;;
+                0) exit 0 ;;
+                *) msg "invalid_choice" ;;
             esac
         fi
     done
@@ -820,17 +705,20 @@ interactive_menu() {
 
 main() {
     choose_language
-
     if [[ ! -f .env ]]; then
         echo ""
         msg "menu_not_configured"
         setup_wizard
         init_runtime
-        msg "starting_runtime"
-        auto_restart
+        install_service
     else
         interactive_menu
     fi
 }
 
-main
+if [[ "${1:-}" == "--run-bot" ]]; then
+    init_runtime
+    auto_restart
+else
+    main
+fi
