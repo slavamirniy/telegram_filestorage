@@ -1,8 +1,4 @@
-code
-Markdown
-download
-content_copy
-expand_less
+
 # 🚀 Telegram File & Media Sharing Bot
 
 Turn Telegram into your personal, unlimited CDN without wasting server disk space. 
