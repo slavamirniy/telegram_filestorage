@@ -605,7 +605,7 @@ EOF
 }
 
 service_exists() {
-    systemctl list-unit-files 2>/dev/null | grep -q '^telegram-bot\.service'
+    systemctl status telegram-bot >/dev/null 2>&1 || systemctl cat telegram-bot >/dev/null 2>&1
 }
 
 service_is_active() {
