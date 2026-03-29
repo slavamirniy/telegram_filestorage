@@ -25,6 +25,7 @@ Run this command on a fresh Linux server (Ubuntu/Debian/CentOS). It will downloa
 ```bash
 curl -sSL https://raw.githubusercontent.com/slavamirniy/telegram_filestorage/refs/heads/main/telegram_filestorage.sh | sudo bash -s install
 Requirements
+```
 
 A fresh Linux Server (Root access required for auto-Nginx setup)
 
