@@ -14,6 +14,10 @@ msg() {
             "check_deps") echo "Проверка базовых зависимостей..." ;;
             "dep_missing") echo "Утилита не найдена, устанавливаем:" ;;
             "setup_start") echo "=== Умная настройка Telegram Бота ===" ;;
+            "bot_running") echo "⚠️ Обнаружена старая конфигурация или запущенный бот." ;;
+            "ask_reset") echo -n "Сбросить настройки, удалить старого бота и начать заново? (y/n) [n]: " ;;
+            "resetting") echo "Остановка службы и удаление старых настроек..." ;;
+            "abort_reset") echo "Установка отменена. Бот продолжает работать." ;;
             "ask_token") echo -n "Введите BOT_TOKEN (от @BotFather): " ;;
             "ask_has_domain") echo -n "Есть ли у вас ДОМЕН, привязанный к этому серверу? (y/n) [y]: " ;;
             "ask_domain") echo -n "Введите ваш ДОМЕН (например, example.com): " ;;
@@ -32,7 +36,7 @@ msg() {
             "webhook_set") echo "Webhook установлен на" ;;
             "start_polling") echo "Запуск в режиме Long Polling..." ;;
             "starting") echo "Бот запускается..." ;;
-            "need_root") echo "Для установки на порт 80 или настройки Nginx требуются права root. Запустите через sudo." ;;
+            "need_root") echo "Для установки требуются права root. Запустите через sudo." ;;
         esac
     else
         case "$1" in
@@ -40,6 +44,10 @@ msg() {
             "check_deps") echo "Checking base dependencies..." ;;
             "dep_missing") echo "Utility missing, installing:" ;;
             "setup_start") echo "=== Smart Telegram Bot Setup ===" ;;
+            "bot_running") echo "⚠️ Existing bot configuration or running service detected." ;;
+            "ask_reset") echo -n "Reset settings, remove old bot, and start fresh? (y/n) [n]: " ;;
+            "resetting") echo "Stopping service and removing old configuration..." ;;
+            "abort_reset") echo "Setup aborted. The bot is still running." ;;
             "ask_token") echo -n "Enter BOT_TOKEN (from @BotFather): " ;;
             "ask_has_domain") echo -n "Do you have a DOMAIN pointed to this server? (y/n) [y]: " ;;
             "ask_domain") echo -n "Enter your DOMAIN (e.g., example.com): " ;;
@@ -58,7 +66,7 @@ msg() {
             "webhook_set") echo "Webhook set to" ;;
             "start_polling") echo "Starting in Long Polling mode..." ;;
             "starting") echo "Starting bot..." ;;
-            "need_root") echo "Root privileges required for port 80 or Nginx. Run script with sudo." ;;
+            "need_root") echo "Root privileges required. Run script with sudo." ;;
         esac
     fi
 }
@@ -69,16 +77,37 @@ if [[ ! -f .env ]]; then
     [[ "$lang_choice" == "2" ]] && LANG_SET="RU"
 fi
 
-# Установка зависимостей
+# Проверка существующих установок
+check_existing() {
+    if systemctl is-active --quiet telegram-bot.service 2>/dev/null || [[ -f .env ]]; then
+        echo ""
+        msg "bot_running"
+        read -p "$(msg 'ask_reset')" reset_choice
+        if [[ "$reset_choice" == "y" || "$reset_choice" == "Y" || "$reset_choice" == "д" || "$reset_choice" == "Д" ]]; then
+            msg "resetting"
+            systemctl stop telegram-bot.service 2>/dev/null || true
+            systemctl disable telegram-bot.service 2>/dev/null || true
+            rm -f /etc/systemd/system/telegram-bot.service
+            systemctl daemon-reload
+            rm -f .env .secret_key
+            echo "-----------------------------------"
+        else
+            msg "abort_reset"
+            echo "Используйте 'bash $0 stop' для остановки бота."
+            exit 0
+        fi
+    fi
+}
+
 check_base_deps() {
     msg "check_deps"
     for cmd in curl openssl nc; do
         if ! command -v $cmd >/dev/null 2>&1; then
             msg "dep_missing"; echo " $cmd"
             if command -v apt-get >/dev/null 2>&1; then
-                sudo apt-get update && sudo apt-get install -y $cmd netcat-openbsd || exit 1
+                apt-get update && apt-get install -y $cmd netcat-openbsd || exit 1
             elif command -v yum >/dev/null 2>&1; then
-                sudo yum install -y $cmd nc || exit 1
+                yum install -y $cmd nc || exit 1
             else
                 exit 1
             fi
@@ -89,7 +118,10 @@ check_base_deps() {
 # --- МАСТЕР НАСТРОЙКИ ---
 setup_wizard() {
     if [[ ! -f .env ]]; then
+        check_existing
+        [[ $EUID -ne 0 ]] && { msg "need_root"; exit 1; }
         check_base_deps
+        
         echo ""
         msg "setup_start"
         
@@ -106,8 +138,6 @@ setup_wizard() {
             
             read -p "$(msg 'ask_nginx')" setup_nginx
             if [[ -z "$setup_nginx" || "$setup_nginx" == "y" || "$setup_nginx" == "Y" || "$setup_nginx" == "д" || "$setup_nginx" == "Д" ]]; then
-                [[ $EUID -ne 0 ]] && { msg "need_root"; exit 1; }
-                
                 if command -v apt-get >/dev/null 2>&1; then
                     apt-get update && apt-get install -y nginx certbot python3-certbot-nginx
                 elif command -v yum >/dev/null 2>&1; then
@@ -196,22 +226,37 @@ EOF
             done
         fi
 
+        # Сохранение с кавычками, чтобы пробелы не ломали чтение
         cat > .env <<EOF
-BOT_TOKEN=$bot_token
-BASE_URL=$base_url
-PORT=$bot_port
+BOT_TOKEN="$bot_token"
+BASE_URL="$base_url"
+PORT="$bot_port"
 PREFIX="$prefix"
 ALLOWED_USER_IDS="$allowed_ids"
-USE_WEBHOOK=$use_webhook
+USE_WEBHOOK="$use_webhook"
 EOF
         echo ""; msg "setup_done"; echo "-----------------------------------"
     fi
 }
 
-setup_wizard
+# --- ЗАПУСК МАСТЕРА (ЕСЛИ НУЖНО) ---
+# Запускаем мастер только если передан аргумент 'install'
+if [[ "${1:-start}" == "install" ]]; then
+    setup_wizard
+fi
 
-# Загрузка переменных
-export $(grep -v '^#' .env | xargs)
+# Безопасная загрузка .env (поддерживает пробелы)
+if [[ -f .env ]]; then
+    set -a
+    source .env
+    set +a
+fi
+
+# Если после мастера файла все еще нет (например, прервали), выходим.
+if [[ ! -f .env && "${1:-start}" == "start" ]]; then
+    echo "Ошибка: .env файл не найден. Выполните 'sudo bash $0 install' для настройки."
+    exit 1
+fi
 
 : "${BOT_TOKEN:?BOT_TOKEN not set}"
 : "${BASE_URL:?BASE_URL not set}"
@@ -329,7 +374,6 @@ serve_file() {
     fi
 }
 
-# HTTP Сервер для отдачи файлов (и вебхука, если включен)
 http_server() {
     while true; do
         {
@@ -359,7 +403,6 @@ http_server() {
     done
 }
 
-# Режим Long Polling (Опрос Telegram)
 long_polling_step() {
     local offset_file="$CACHE_DIR/offset"
     local offset=0
@@ -387,12 +430,13 @@ auto_restart() {
     fi
 }
 
+# --- МЕНЮ УПРАВЛЕНИЯ ---
 case "${1:-start}" in
     start)
         auto_restart
         ;;
     install)
-        [[ $EUID -ne 0 ]] && { echo "Запустите: sudo bash $0 install"; exit 1; }
+        [[ $EUID -ne 0 ]] && { echo "Запустите с sudo: sudo bash $0 install"; exit 1; }
         
         cat > /etc/systemd/system/telegram-bot.service <<EOF
 [Unit]
@@ -413,11 +457,27 @@ EOF
         systemctl daemon-reload
         systemctl enable telegram-bot
         systemctl start telegram-bot
-        echo "✅ Установлено как служба: telegram-bot"
-        echo "Проверить статус: systemctl status telegram-bot"
+        echo "✅ Бот установлен и работает (служба systemd: telegram-bot)"
+        echo "Проверить логи: sudo journalctl -u telegram-bot -f"
+        ;;
+    stop)
+        systemctl stop telegram-bot 2>/dev/null || true
+        echo "Бот остановлен."
+        ;;
+    status)
+        systemctl status telegram-bot
+        ;;
+    uninstall)
+        [[ $EUID -ne 0 ]] && { echo "Запустите с sudo: sudo bash $0 uninstall"; exit 1; }
+        systemctl stop telegram-bot 2>/dev/null || true
+        systemctl disable telegram-bot 2>/dev/null || true
+        rm -f /etc/systemd/system/telegram-bot.service
+        systemctl daemon-reload
+        rm -f .env .secret_key
+        echo "Бот и настройки полностью удалены."
         ;;
     *)
-        echo "Usage: $0 {start|install}"
+        echo "Использование: $0 {install|start|stop|status|uninstall}"
         exit 1
         ;;
 esac
