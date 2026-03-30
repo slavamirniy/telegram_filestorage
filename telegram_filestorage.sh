@@ -284,24 +284,23 @@ load_env_safe() {
     set +a
 }
 
-SECRET_KEY_FILE=".secret_key"
-
-encode_data() {
-    echo -n "$1" | openssl enc -aes-256-cbc -a -A -pbkdf2 -pass pass:"$SECRET_KEY" 2>/dev/null | tr '+/' '-_' | tr -d '='
-}
-
-decode_data() {
-    local padded
-    padded=$(echo -n "$1" | tr '_-' '/+')
-    local mod
-    mod=$((${#padded} % 4))
-    [[ $mod -gt 0 ]] && padded="${padded}$(printf '=%.0s' $(seq 1 $((4 - mod))))"
-    echo -n "$padded" | openssl enc -aes-256-cbc -d -a -A -pbkdf2 -pass pass:"$SECRET_KEY" 2>/dev/null
-}
-
-file_cache_path() { echo "${FILE_CACHE_DIR}/$1.meta"; }
+file_cache_path() { echo "${FILE_CACHE_DIR}/$1.json"; }
 file_id_map_path() { echo "${FILE_ID_MAP_DIR}/$1.id"; }
 text_cache_path() { echo "${TEXT_CACHE_DIR}/$1.txt"; }
+
+json_escape() {
+    python3 - <<'PY' "$1"
+import json, sys
+print(json.dumps(sys.argv[1]), end="")
+PY
+}
+
+atomic_write() {
+    local dst="$1"
+    local tmp="${dst}.$$.tmp"
+    cat > "$tmp"
+    mv -f "$tmp" "$dst"
+}
 
 safe_http_send() {
     local code="$1"
@@ -320,94 +319,6 @@ safe_http_send() {
 
 safe_http_not_found() {
     safe_http_send "404 Not Found" "text/plain; charset=utf-8" "Not Found"
-}
-
-save_file_cache() {
-    local short_id="$1"
-    local file_id="$2"
-    local ext="$3"
-    local file_path="$4"
-
-    cat > "$(file_cache_path "$short_id")" <<EOF
-SHORT_ID=$short_id
-FILE_ID=$file_id
-EXT=$ext
-FILE_PATH=$file_path
-DIRECT_URL=https://api.telegram.org/file/bot${BOT_TOKEN}/${file_path}
-UPDATED_AT=$(date +%s)
-EOF
-
-    printf '%s' "$short_id" > "$(file_id_map_path "$file_id")"
-}
-
-load_file_cache() {
-    local short_id="$1"
-    local cache_file
-    cache_file=$(file_cache_path "$short_id")
-    [[ -f "$cache_file" ]] || return 1
-    # shellcheck disable=SC1090
-    source "$cache_file"
-}
-
-find_or_create_short_id_for_file() {
-    local file_id="$1"
-    local ext="$2"
-
-    if [[ -f "$(file_id_map_path "$file_id")" ]]; then
-        local existing
-        existing=$(cat "$(file_id_map_path "$file_id")")
-        [[ -n "$existing" ]] && { echo "$existing"; return; }
-    fi
-
-    local short_id
-    while true; do
-        short_id=$(openssl rand -hex 12)
-        [[ ! -f "$(file_cache_path "$short_id")" ]] && break
-    done
-
-    echo "$short_id"
-}
-
-direct_url_valid() {
-    local url="$1"
-    [[ -z "$url" ]] && return 1
-    local code
-    code=$(curl -s -L -r 0-0 -o /dev/null -w "%{http_code}" --max-time 20 "$url" || echo 000)
-    [[ "$code" == "200" || "$code" == "206" ]]
-}
-
-refresh_file_cache_by_short_id() {
-    local short_id="$1"
-    load_file_cache "$short_id" || return 1
-
-    local response file_path
-    response=$(curl -s "${API}/getFile?file_id=${FILE_ID}")
-    file_path=$(echo "$response" | grep -o '"file_path":"[^"]*"' | cut -d'"' -f4)
-    [[ -n "$file_path" ]] || return 1
-
-    save_file_cache "$short_id" "$FILE_ID" "$EXT" "$file_path"
-}
-
-create_or_update_file_link() {
-    local chat_id="$1"
-    local file_id="$2"
-    local ext="$3"
-
-    local short_id
-    short_id=$(find_or_create_short_id_for_file "$file_id" "$ext")
-
-    local response file_path
-    response=$(curl -s "${API}/getFile?file_id=${file_id}")
-    file_path=$(echo "$response" | grep -o '"file_path":"[^"]*"' | cut -d'"' -f4)
-
-    if [[ -n "$file_path" ]]; then
-        save_file_cache "$short_id" "$file_id" "$ext" "$file_path"
-    fi
-
-    local token
-    token=$(encode_data "f|${short_id}")
-    local message="${PREFIX}${BASE_URL}/file/${token}.${ext}"
-    curl -s -X POST "${API}/sendMessage" --data-urlencode "chat_id=${chat_id}" --data-urlencode "text=${message}" >/dev/null
 }
 
 cleanup_text_cache() {
@@ -435,7 +346,7 @@ except Exception:
 
 msg = obj.get("message") or {}
 text = msg.get("text", "")
-print(text.replace("\n", "").replace("\r", ""), end="")
+print(text, end="")
 PY
 }
 
@@ -464,19 +375,175 @@ elif expr == "document_file_id":
     val = msg.get("document", {}).get("file_id", "")
 elif expr == "document_file_name":
     val = msg.get("document", {}).get("file_name", "")
+elif expr == "document_mime_type":
+    val = msg.get("document", {}).get("mime_type", "")
 elif expr == "video_file_id":
     val = msg.get("video", {}).get("file_id", "")
+elif expr == "video_mime_type":
+    val = msg.get("video", {}).get("mime_type", "")
 elif expr == "audio_file_id":
     val = msg.get("audio", {}).get("file_id", "")
 elif expr == "audio_file_name":
     val = msg.get("audio", {}).get("file_name", "")
+elif expr == "audio_mime_type":
+    val = msg.get("audio", {}).get("mime_type", "")
 elif expr == "voice_file_id":
     val = msg.get("voice", {}).get("file_id", "")
+elif expr == "voice_mime_type":
+    val = msg.get("voice", {}).get("mime_type", "")
 elif expr == "photo_last_file_id":
     photos = msg.get("photo", [])
     val = photos[-1].get("file_id", "") if photos else ""
 print(val, end="")
 PY
+}
+
+random_short_id() {
+    python3 - <<'PY'
+import secrets
+print(secrets.token_urlsafe(6), end="")
+PY
+}
+
+find_or_create_short_id_for_file() {
+    local file_id="$1"
+
+    if [[ -f "$(file_id_map_path "$file_id")" ]]; then
+        local existing
+        existing=$(cat "$(file_id_map_path "$file_id")" 2>/dev/null || true)
+        [[ -n "$existing" ]] && { echo "$existing"; return; }
+    fi
+
+    local short_id
+    while true; do
+        short_id=$(random_short_id)
+        [[ ! -f "$(file_cache_path "$short_id")" ]] && break
+    done
+
+    printf '%s' "$short_id" > "$(file_id_map_path "$file_id")"
+    echo "$short_id"
+}
+
+save_file_cache() {
+    local short_id="$1"
+    local file_id="$2"
+    local ext="$3"
+    local file_name="$4"
+    local mime_type="$5"
+    local file_path="$6"
+
+    local direct_url="https://api.telegram.org/file/bot${BOT_TOKEN}/${file_path}"
+    local updated_at
+    updated_at=$(date +%s)
+
+    cat <<EOF | atomic_write "$(file_cache_path "$short_id")"
+{
+  "short_id": $(json_escape "$short_id"),
+  "file_id": $(json_escape "$file_id"),
+  "ext": $(json_escape "$ext"),
+  "file_name": $(json_escape "$file_name"),
+  "mime_type": $(json_escape "$mime_type"),
+  "file_path": $(json_escape "$file_path"),
+  "direct_url": $(json_escape "$direct_url"),
+  "updated_at": $updated_at
+}
+EOF
+}
+
+load_file_cache_json() {
+    local short_id="$1"
+    local cache_file
+    cache_file=$(file_cache_path "$short_id")
+    [[ -f "$cache_file" ]] || return 1
+    cat "$cache_file"
+}
+
+direct_url_valid() {
+    local url="$1"
+    [[ -z "$url" ]] && return 1
+    local code
+    code=$(curl -s -L -r 0-0 -o /dev/null -w "%{http_code}" --max-time 20 "$url" || echo 000)
+    [[ "$code" == "200" || "$code" == "206" ]]
+}
+
+get_file_path_from_tg() {
+    local file_id="$1"
+    python3 - <<'PY' "$API" "$file_id"
+import sys, json, urllib.request, urllib.parse
+api = sys.argv[1]
+file_id = sys.argv[2]
+url = f"{api}/getFile?file_id=" + urllib.parse.quote(file_id)
+try:
+    with urllib.request.urlopen(url, timeout=20) as r:
+        data = json.loads(r.read().decode())
+    print((data.get("result") or {}).get("file_path", ""), end="")
+except Exception:
+    print("", end="")
+PY
+}
+
+refresh_file_cache_by_short_id() {
+    local short_id="$1"
+    local raw
+    raw=$(load_file_cache_json "$short_id") || return 1
+
+    python3 - <<'PY' "$raw"
+import sys, json
+obj = json.loads(sys.argv[1])
+print(obj.get("file_id",""))
+print(obj.get("ext",""))
+print(obj.get("file_name",""))
+print(obj.get("mime_type",""))
+PY
+}
+
+update_file_cache_from_short_id() {
+    local short_id="$1"
+    local raw file_id ext file_name mime_type file_path
+    raw=$(load_file_cache_json "$short_id") || return 1
+
+    mapfile -t vals < <(python3 - <<'PY' "$raw"
+import sys, json
+obj = json.loads(sys.argv[1])
+print(obj.get("file_id",""))
+print(obj.get("ext",""))
+print(obj.get("file_name",""))
+print(obj.get("mime_type",""))
+PY
+)
+    file_id="${vals[0]:-}"
+    ext="${vals[1]:-}"
+    file_name="${vals[2]:-}"
+    mime_type="${vals[3]:-}"
+
+    [[ -n "$file_id" ]] || return 1
+    file_path=$(get_file_path_from_tg "$file_id")
+    [[ -n "$file_path" ]] || return 1
+
+    save_file_cache "$short_id" "$file_id" "$ext" "$file_name" "$mime_type" "$file_path"
+}
+
+create_or_update_file_link() {
+    local chat_id="$1"
+    local file_id="$2"
+    local ext="$3"
+    local file_name="$4"
+    local mime_type="$5"
+
+    local short_id
+    short_id=$(find_or_create_short_id_for_file "$file_id")
+
+    local file_path
+    file_path=$(get_file_path_from_tg "$file_id")
+
+    if [[ -n "$file_path" ]]; then
+        save_file_cache "$short_id" "$file_id" "$ext" "$file_name" "$mime_type" "$file_path"
+    fi
+
+    local message="${PREFIX}${BASE_URL}/file/${short_id}.${ext}"
+    curl -s -X POST "${API}/sendMessage" \
+        --data-urlencode "chat_id=${chat_id}" \
+        --data-urlencode "text=${message}" >/dev/null
 }
 
 handle_text() {
@@ -496,7 +563,7 @@ handle_text() {
         mkdir "$lock_dir" 2>/dev/null || exit 0
 
         local joined_text
-        joined_text=$(tr -d '\n' < "$buffer_file")
+        joined_text=$(cat "$buffer_file")
         rm -f "$buffer_file"
         rmdir "$lock_dir" 2>/dev/null || true
 
@@ -506,16 +573,16 @@ handle_text() {
 
         local text_id
         while true; do
-            text_id=$(openssl rand -hex 12)
+            text_id=$(random_short_id)
             [[ ! -f "$(text_cache_path "$text_id")" ]] && break
         done
 
         printf '%s' "$joined_text" > "$(text_cache_path "$text_id")"
 
-        local token
-        token=$(encode_data "t|${text_id}")
-        local message="${PREFIX}${BASE_URL}/file/${token}.txt"
-        curl -s -X POST "${API}/sendMessage" --data-urlencode "chat_id=${chat_id}" --data-urlencode "text=${message}" >/dev/null
+        local message="${PREFIX}${BASE_URL}/file/${text_id}.txt"
+        curl -s -X POST "${API}/sendMessage" \
+            --data-urlencode "chat_id=${chat_id}" \
+            --data-urlencode "text=${message}" >/dev/null
     ) &
 }
 
@@ -532,41 +599,49 @@ process_update() {
         [[ ",${ALLOWED_USER_IDS}," == *",${user_id},"* ]] || return 0
     fi
 
-    local document_file_id document_file_name video_file_id photo_file_id text_content audio_file_id audio_file_name voice_file_id
+    local document_file_id document_file_name document_mime_type
+    local video_file_id video_mime_type photo_file_id text_content
+    local audio_file_id audio_file_name audio_mime_type
+    local voice_file_id voice_mime_type
+
     document_file_id=$(extract_json_field_python "$json" "document_file_id")
     document_file_name=$(extract_json_field_python "$json" "document_file_name")
+    document_mime_type=$(extract_json_field_python "$json" "document_mime_type")
     video_file_id=$(extract_json_field_python "$json" "video_file_id")
+    video_mime_type=$(extract_json_field_python "$json" "video_mime_type")
     photo_file_id=$(extract_json_field_python "$json" "photo_last_file_id")
     audio_file_id=$(extract_json_field_python "$json" "audio_file_id")
     audio_file_name=$(extract_json_field_python "$json" "audio_file_name")
+    audio_mime_type=$(extract_json_field_python "$json" "audio_mime_type")
     voice_file_id=$(extract_json_field_python "$json" "voice_file_id")
+    voice_mime_type=$(extract_json_field_python "$json" "voice_mime_type")
 
     if [[ -n "$document_file_id" ]]; then
         local ext="${document_file_name##*.}"
         [[ "$ext" == "$document_file_name" || -z "$ext" ]] && ext="bin"
-        create_or_update_file_link "$chat_id" "$document_file_id" "$ext"
+        create_or_update_file_link "$chat_id" "$document_file_id" "$ext" "$document_file_name" "$document_mime_type"
         return 0
     fi
 
     if [[ -n "$photo_file_id" ]]; then
-        create_or_update_file_link "$chat_id" "$photo_file_id" "jpg"
+        create_or_update_file_link "$chat_id" "$photo_file_id" "jpg" "image.jpg" "image/jpeg"
         return 0
     fi
 
     if [[ -n "$video_file_id" ]]; then
-        create_or_update_file_link "$chat_id" "$video_file_id" "mp4"
+        create_or_update_file_link "$chat_id" "$video_file_id" "mp4" "video.mp4" "${video_mime_type:-video/mp4}"
         return 0
     fi
 
     if [[ -n "$audio_file_id" ]]; then
         local ext="${audio_file_name##*.}"
         [[ "$ext" == "$audio_file_name" || -z "$ext" ]] && ext="mp3"
-        create_or_update_file_link "$chat_id" "$audio_file_id" "$ext"
+        create_or_update_file_link "$chat_id" "$audio_file_id" "$ext" "${audio_file_name:-audio.$ext}" "$audio_mime_type"
         return 0
     fi
 
     if [[ -n "$voice_file_id" ]]; then
-        create_or_update_file_link "$chat_id" "$voice_file_id" "ogg"
+        create_or_update_file_link "$chat_id" "$voice_file_id" "ogg" "voice.ogg" "${voice_mime_type:-audio/ogg}"
         return 0
     fi
 
@@ -576,48 +651,98 @@ process_update() {
     fi
 }
 
-serve_text_by_id() {
+serve_text_meta() {
     local text_id="$1"
     cleanup_text_cache
     local file
     file=$(text_cache_path "$text_id")
-    [[ -f "$file" ]] || { safe_http_not_found; return 0; }
+    [[ -f "$file" ]] || { echo '{"ok":false,"status":404}'; return 0; }
 
-    local content
-    content=$(cat "$file")
-    safe_http_send "200 OK" "text/plain; charset=utf-8" "$content"
+    python3 - <<'PY' "$file"
+import sys, json, os
+path = sys.argv[1]
+size = os.path.getsize(path)
+print(json.dumps({
+    "ok": True,
+    "kind": "text",
+    "path": path,
+    "content_type": "text/plain; charset=utf-8",
+    "content_disposition": "inline",
+    "cache_control": "public, max-age=3600",
+    "content_length": size
+}), end="")
+PY
 }
 
-serve_file_by_short_id() {
+serve_file_meta() {
     local short_id="$1"
-    load_file_cache "$short_id" || { safe_http_not_found; return 0; }
+    local raw
+    raw=$(load_file_cache_json "$short_id") || { echo '{"ok":false,"status":404}'; return 0; }
 
-    local url=""
-    if direct_url_valid "${DIRECT_URL:-}"; then
-        url="$DIRECT_URL"
-    else
-        refresh_file_cache_by_short_id "$short_id" || { safe_http_not_found; return 0; }
-        load_file_cache "$short_id" || { safe_http_not_found; return 0; }
-        if direct_url_valid "${DIRECT_URL:-}"; then
-            url="$DIRECT_URL"
-        fi
+    mapfile -t vals < <(python3 - <<'PY' "$raw"
+import sys, json
+obj = json.loads(sys.argv[1])
+print(obj.get("direct_url",""))
+print(obj.get("file_name",""))
+print(obj.get("mime_type",""))
+print(obj.get("ext",""))
+PY
+)
+    local direct_url="${vals[0]:-}"
+    local file_name="${vals[1]:-}"
+    local mime_type="${vals[2]:-}"
+    local ext="${vals[3]:-}"
+
+    if ! direct_url_valid "$direct_url"; then
+        update_file_cache_from_short_id "$short_id" || { echo '{"ok":false,"status":404}'; return 0; }
+        raw=$(load_file_cache_json "$short_id") || { echo '{"ok":false,"status":404}'; return 0; }
+        mapfile -t vals < <(python3 - <<'PY' "$raw"
+import sys, json
+obj = json.loads(sys.argv[1])
+print(obj.get("direct_url",""))
+print(obj.get("file_name",""))
+print(obj.get("mime_type",""))
+print(obj.get("ext",""))
+PY
+)
+        direct_url="${vals[0]:-}"
+        file_name="${vals[1]:-}"
+        mime_type="${vals[2]:-}"
+        ext="${vals[3]:-}"
     fi
 
-    [[ -n "$url" ]] || { safe_http_not_found; return 0; }
+    [[ -n "$direct_url" ]] || { echo '{"ok":false,"status":404}'; return 0; }
 
-    local headers
-    headers=$(curl -s -I --max-time 20 "$url" || true)
-    local clen ctype
-    clen=$(echo "$headers" | grep -i '^content-length:' | tr -d '\r' || true)
-    ctype=$(echo "$headers" | grep -i '^content-type:' | tr -d '\r' || true)
+    python3 - <<'PY' "$direct_url" "$file_name" "$mime_type" "$ext"
+import sys, json, mimetypes
+url, file_name, mime_type, ext = sys.argv[1:5]
 
-    printf "HTTP/1.1 200 OK\r\n"
-    [[ -n "$ctype" ]] && printf "%s\r\n" "$ctype"
-    [[ -n "$clen" ]] && printf "%s\r\n" "$clen"
-    printf "Connection: close\r\n"
-    printf "Cache-Control: public, max-age=3600\r\n"
-    printf "\r\n"
-    curl -s -L "$url"
+if not mime_type:
+    guessed, _ = mimetypes.guess_type(file_name or ("file." + ext if ext else "file"))
+    mime_type = guessed or "application/octet-stream"
+
+disp = "attachment"
+ml = mime_type.lower()
+
+if ml.startswith("image/"):
+    disp = "inline"
+elif ml.startswith("text/plain"):
+    disp = "inline"
+elif ml.startswith("text/html"):
+    disp = "attachment"
+elif ml.startswith("text/"):
+    disp = "inline"
+
+print(json.dumps({
+    "ok": True,
+    "kind": "remote_file",
+    "url": url,
+    "content_type": mime_type,
+    "content_disposition": disp,
+    "file_name": file_name or ("file." + ext if ext else "file"),
+    "cache_control": "public, max-age=3600"
+}), end="")
+PY
 }
 
 python_http_server() {
@@ -626,6 +751,7 @@ import os
 import re
 import sys
 import json
+import urllib.request
 import urllib.parse
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -633,7 +759,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT = int(os.environ.get("PORT", "8080"))
 USE_WEBHOOK = os.environ.get("USE_WEBHOOK", "false").lower()
 SCRIPT_PATH = os.environ.get("SCRIPT_PATH", "")
-BASE_URL = os.environ.get("BASE_URL", "")
 
 def sh(*args, input_data=None):
     p = subprocess.run(args, input=input_data, text=True, capture_output=True)
@@ -645,66 +770,61 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - - [%s] %s\n" % (self.address_string(), self.log_date_time_string(), fmt % args))
 
-    def do_POST(self):
-        if self.path == "/webhook" and USE_WEBHOOK == "true":
-            length = int(self.headers.get("Content-Length", "0"))
-            body = self.rfile.read(length).decode("utf-8", "ignore") if length > 0 else ""
-            subprocess.Popen([SCRIPT_PATH, "--process-update"], stdin=subprocess.PIPE, text=True).communicate(body)
-            data = b"OK"
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Connection", "close")
-            self.end_headers()
-            self.wfile.write(data)
-            self.close_connection = True
-            return
-
-        data = b"Not Found"
-        self.send_response(404)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
+    def _send_simple(self, code, body, ctype="text/plain; charset=utf-8"):
+        data = body.encode("utf-8", "ignore")
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(data)
         self.close_connection = True
 
+    def do_POST(self):
+        if self.path == "/webhook" and USE_WEBHOOK == "true":
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length).decode("utf-8", "ignore") if length > 0 else ""
+            subprocess.Popen([SCRIPT_PATH, "--process-update"], stdin=subprocess.PIPE, text=True).communicate(body)
+            self._send_simple(200, "OK")
+            return
+        self._send_simple(404, "Not Found")
+
     def do_GET(self):
-        m = re.match(r"^/file/([^.]+)\.([A-Za-z0-9]+)$", self.path)
+        m = re.match(r"^/file/([A-Za-z0-9_-]+)\.([A-Za-z0-9]+)$", self.path)
         if not m:
-            data = b"Not Found"
-            self.send_response(404)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Connection", "close")
-            self.end_headers()
-            self.wfile.write(data)
-            self.close_connection = True
+            self._send_simple(404, "Not Found")
             return
 
-        token = m.group(1)
-        ext = m.group(2)
+        item_id = m.group(1)
+        ext = m.group(2).lower()
 
-        rc, stdout, stderr = sh(SCRIPT_PATH, "--serve", token, ext)
-        raw = stdout.encode("utf-8", "ignore") if isinstance(stdout, str) else stdout
+        if ext == "txt":
+            rc, stdout, stderr = sh(SCRIPT_PATH, "--serve-text-meta", item_id)
+        else:
+            rc, stdout, stderr = sh(SCRIPT_PATH, "--serve-file-meta", item_id)
 
-        if not raw:
-            data = b"Not Found"
-            self.send_response(404)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Connection", "close")
-            self.end_headers()
-            self.wfile.write(data)
-            self.close_connection = True
+        try:
+            meta = json.loads(stdout or "{}")
+        except Exception:
+            meta = {"ok": False, "status": 500}
+
+        if not meta.get("ok"):
+            self._send_simple(int(meta.get("status", 404)), "Not Found")
             return
 
-        sep = b"\r\n\r\n"
-        idx = raw.find(sep)
-        if idx == -1:
-            data = raw
+        if meta.get("kind") == "text":
+            path = meta["path"]
+            try:
+                with open(path, "rb") as f:
+                    data = f.read()
+            except FileNotFoundError:
+                self._send_simple(404, "Not Found")
+                return
+
             self.send_response(200)
-            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Type", meta.get("content_type", "text/plain; charset=utf-8"))
+            self.send_header("Content-Disposition", meta.get("content_disposition", "inline"))
+            self.send_header("Cache-Control", meta.get("cache_control", "public, max-age=3600"))
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Connection", "close")
             self.end_headers()
@@ -712,34 +832,40 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             return
 
-        header_block = raw[:idx].decode("utf-8", "ignore")
-        body = raw[idx + 4:]
+        if meta.get("kind") == "remote_file":
+            url = meta["url"]
+            req = urllib.request.Request(url, headers={"User-Agent": "tg-proxy/1.0"})
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    self.send_response(200)
 
-        first = header_block.splitlines()[0] if header_block.splitlines() else "HTTP/1.1 200 OK"
-        parts = first.split(" ", 2)
-        code = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 200
+                    ctype = meta.get("content_type") or resp.headers.get("Content-Type") or "application/octet-stream"
+                    self.send_header("Content-Type", ctype)
 
-        self.send_response(code)
+                    file_name = meta.get("file_name", "file")
+                    disp = meta.get("content_disposition", "attachment")
+                    self.send_header("Content-Disposition", f'{disp}; filename="{file_name}"')
 
-        sent_len = False
-        for line in header_block.splitlines()[1:]:
-            if ":" not in line:
-                continue
-            k, v = line.split(":", 1)
-            k = k.strip()
-            v = v.strip()
-            if k.lower() == "content-length":
-                sent_len = True
-            if k.lower() == "connection":
-                continue
-            self.send_header(k, v)
+                    clen = resp.headers.get("Content-Length")
+                    if clen:
+                        self.send_header("Content-Length", clen)
 
-        if not sent_len:
-            self.send_header("Content-Length", str(len(body)))
-        self.send_header("Connection", "close")
-        self.end_headers()
-        self.wfile.write(body)
-        self.close_connection = True
+                    self.send_header("Cache-Control", meta.get("cache_control", "public, max-age=3600"))
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                    self.close_connection = True
+                    return
+            except Exception:
+                self._send_simple(404, "Not Found")
+                return
+
+        self._send_simple(500, "Internal Error")
 
 server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
 server.serve_forever()
@@ -769,7 +895,9 @@ except Exception:
     raise SystemExit(0)
 
 for item in obj.get("result", []):
-    subprocess.Popen([script, "--process-update"], stdin=subprocess.PIPE, text=True).communicate(json.dumps({"message": item.get("message", {})}))
+    msg = item.get("message", {})
+    if msg:
+        subprocess.Popen([script, "--process-update"], stdin=subprocess.PIPE, text=True).communicate(json.dumps({"message": msg}))
 PY
     fi
 }
@@ -873,12 +1001,6 @@ init_runtime() {
     : "${PREFIX:=}"
     : "${ALLOWED_USER_IDS:=}"
     : "${USE_WEBHOOK:=false}"
-
-    if [[ ! -f "$SECRET_KEY_FILE" ]]; then
-        openssl rand -hex 32 > "$SECRET_KEY_FILE"
-        chmod 600 "$SECRET_KEY_FILE"
-    fi
-    SECRET_KEY=$(cat "$SECRET_KEY_FILE")
 
     API="https://api.telegram.org/bot${BOT_TOKEN}"
     CACHE_DIR="/tmp/tg_bot_cache"
@@ -990,21 +1112,19 @@ if [[ "${1:-}" == "--process-update" ]]; then
     exit 0
 fi
 
-if [[ "${1:-}" == "--serve" ]]; then
+if [[ "${1:-}" == "--serve-text-meta" ]]; then
     init_runtime
-    token="${2:-}"
-    ext="${3:-}"
-    [[ -n "$token" ]] || { safe_http_not_found; exit 0; }
-    data=$(decode_data "$token" || true)
-    if [[ "$data" == f\|* ]]; then
-        short_id=$(echo "$data" | cut -d'|' -f2)
-        serve_file_by_short_id "$short_id"
-    elif [[ "$data" == t\|* ]] && [[ "$ext" == "txt" ]]; then
-        text_id=$(echo "$data" | cut -d'|' -f2)
-        serve_text_by_id "$text_id"
-    else
-        safe_http_not_found
-    fi
+    text_id="${2:-}"
+    [[ -n "$text_id" ]] || { echo '{"ok":false,"status":404}'; exit 0; }
+    serve_text_meta "$text_id"
+    exit 0
+fi
+
+if [[ "${1:-}" == "--serve-file-meta" ]]; then
+    init_runtime
+    short_id="${2:-}"
+    [[ -n "$short_id" ]] || { echo '{"ok":false,"status":404}'; exit 0; }
+    serve_file_meta "$short_id"
     exit 0
 fi
 
