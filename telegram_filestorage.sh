@@ -2,6 +2,10 @@
 set -euo pipefail
 
 LANG_SET="EN"
+APP_NAME="telegram-bot"
+INSTALL_DIR="/opt/telegram-bot"
+INSTALL_SCRIPT="${INSTALL_DIR}/startbotstorage.sh"
+SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
 
 msg() {
     if [[ "$LANG_SET" == "RU" ]]; then
@@ -17,14 +21,14 @@ msg() {
             "detecting_ip") echo "Определяем IP адрес сервера..." ;;
             "ask_ip") echo -n "Подтвердите IP сервера (Enter для использования $2): " ;;
             "info_polling") echo "Домен не указан. Бот будет работать по HTTP/IP без webhook." ;;
-            "ask_port") echo -n "На каком локальном порту запускать бота? [80]: " ;;
+            "ask_port") echo -n "На каком локальном порту запускать бота? [8080]: " ;;
             "ask_prefix") echo -n "Введите ПРЕФИКС для сообщений (необязательно): " ;;
             "ask_allowed") echo -n "Включить приватный режим (доступ только по вашему ID)? (y/n) [n]: " ;;
             "listen_user") echo "Ожидание... Напишите ЛЮБОЕ сообщение вашему боту в Telegram прямо сейчас." ;;
             "user_found") echo "Получено сообщение от" ;;
             "ask_add_user") echo -n "Добавить этого пользователя в разрешенные? (y/n) [y]: " ;;
             "ask_more_user") echo -n "Ожидать еще одного пользователя? (y/n) [n]: " ;;
-            "setup_done") echo "Настройка завершена! Конфигурация сохранена в .env" ;;
+            "setup_done") echo "Настройка завершена! Конфигурация сохранена." ;;
             "webhook_set") echo "Webhook установлен на" ;;
             "starting") echo "Бот запускается..." ;;
             "need_root") echo "Для установки Nginx/HTTPS требуются права root. Запустите через sudo." ;;
@@ -43,18 +47,39 @@ msg() {
             "menu_restart_service_alt") echo "2) Перезапустить systemd-службу" ;;
             "menu_show_status") echo "7) Показать статус службы" ;;
             "menu_show_logs") echo "8) Показать логи службы" ;;
+            "menu_edit_settings") echo "4) Изменить настройки" ;;
+            "menu_full_reset") echo "9) Полный сброс службы и кэша" ;;
             "menu_exit") echo "0) Выход" ;;
             "menu_prompt") echo -n "Введите номер действия: " ;;
             "invalid_choice") echo "Неверный выбор." ;;
-            "service_installed") echo "✅ Установлено как служба: telegram-bot" ;;
-            "service_started") echo "Служба запущена." ;;
-            "service_restart_done") echo "Служба перезапущена." ;;
-            "service_stop_done") echo "Служба остановлена." ;;
+            "service_installed") echo "✅ Служба установлена: telegram-bot" ;;
+            "service_started") echo "✅ Служба запущена." ;;
+            "service_restart_done") echo "✅ Служба перезапущена." ;;
+            "service_stop_done") echo "✅ Служба остановлена." ;;
             "service_not_found") echo "Служба telegram-bot не найдена." ;;
             "press_enter") echo -n "Нажмите Enter для продолжения..." ;;
-            "reconfig_done") echo "Старая конфигурация удалена. Запускаем настройку..." ;;
+            "reconfig_done") echo "Старая конфигурация и кэш удалены. Запускаем настройку..." ;;
             "must_use_sudo") echo "Для этой операции нужны права root. Запустите через sudo." ;;
             "txt_not_found") echo "Текст не найден или истёк." ;;
+            "service_autostarted") echo "✅ Служба автоматически установлена и запущена." ;;
+            "service_path") echo "Файл сервиса использует скрипт:" ;;
+            "settings_menu") echo "=== Изменение настроек ===" ;;
+            "settings_base_url") echo "1) Изменить домен / IP / BASE_URL" ;;
+            "settings_prefix") echo "2) Изменить PREFIX" ;;
+            "settings_privacy") echo "3) Включить/выключить приватный режим" ;;
+            "settings_allowed_add") echo "4) Добавить allowed user ID" ;;
+            "settings_allowed_reset") echo "5) Сбросить allowed user IDs" ;;
+            "settings_show") echo "6) Показать текущие настройки" ;;
+            "settings_back") echo "0) Назад" ;;
+            "settings_saved") echo "✅ Настройки сохранены." ;;
+            "settings_current") echo "Текущие настройки:" ;;
+            "ask_new_prefix") echo -n "Введите новый PREFIX (можно пустой): " ;;
+            "ask_manual_ids") echo -n "Введите user ID через запятую (можно пусто): " ;;
+            "ask_enable_private") echo -n "Включить приватный режим? (y/n) [y]: " ;;
+            "ask_change_mode") echo -n "Использовать домен? (y/n) [y]: " ;;
+            "ask_rebuild_nginx") echo -n "Перенастроить Nginx/HTTPS для домена? (y/n) [y]: " ;;
+            "cert_exists") echo "SSL сертификат уже существует, повторный выпуск не требуется." ;;
+            "full_reset_done") echo "✅ Полный сброс службы, конфигурации и кэша выполнен." ;;
         esac
     else
         case "$1" in
@@ -69,14 +94,14 @@ msg() {
             "detecting_ip") echo "Detecting server IP address..." ;;
             "ask_ip") echo -n "Confirm server IP (Press Enter to use $2): " ;;
             "info_polling") echo "No domain provided. Bot will work over HTTP/IP without webhook." ;;
-            "ask_port") echo -n "Which local port to run the bot on? [80]: " ;;
+            "ask_port") echo -n "Which local port to run the bot on? [8080]: " ;;
             "ask_prefix") echo -n "Enter PREFIX for messages (optional): " ;;
             "ask_allowed") echo -n "Enable private mode (restrict by User IDs)? (y/n) [n]: " ;;
             "listen_user") echo "Waiting... Send ANY message to your bot in Telegram right now." ;;
             "user_found") echo "Received message from" ;;
             "ask_add_user") echo -n "Add this user to allowed list? (y/n) [y]: " ;;
             "ask_more_user") echo -n "Wait for another user? (y/n) [n]: " ;;
-            "setup_done") echo "Setup complete! Configuration saved to .env" ;;
+            "setup_done") echo "Setup complete! Configuration saved." ;;
             "webhook_set") echo "Webhook set to" ;;
             "starting") echo "Starting bot..." ;;
             "need_root") echo "Root privileges required for Nginx/HTTPS setup. Run with sudo." ;;
@@ -95,18 +120,39 @@ msg() {
             "menu_restart_service_alt") echo "2) Restart systemd service" ;;
             "menu_show_status") echo "7) Show service status" ;;
             "menu_show_logs") echo "8) Show service logs" ;;
+            "menu_edit_settings") echo "4) Edit settings" ;;
+            "menu_full_reset") echo "9) Full service/cache reset" ;;
             "menu_exit") echo "0) Exit" ;;
             "menu_prompt") echo -n "Enter action number: " ;;
             "invalid_choice") echo "Invalid choice." ;;
-            "service_installed") echo "✅ Installed as service: telegram-bot" ;;
-            "service_started") echo "Service started." ;;
-            "service_restart_done") echo "Service restarted." ;;
-            "service_stop_done") echo "Service stopped." ;;
+            "service_installed") echo "✅ Service installed: telegram-bot" ;;
+            "service_started") echo "✅ Service started." ;;
+            "service_restart_done") echo "✅ Service restarted." ;;
+            "service_stop_done") echo "✅ Service stopped." ;;
             "service_not_found") echo "telegram-bot service not found." ;;
             "press_enter") echo -n "Press Enter to continue..." ;;
-            "reconfig_done") echo "Old configuration removed. Starting setup..." ;;
+            "reconfig_done") echo "Old configuration and cache removed. Starting setup..." ;;
             "must_use_sudo") echo "Root privileges required for this operation. Run with sudo." ;;
             "txt_not_found") echo "Text not found or expired." ;;
+            "service_autostarted") echo "✅ Service installed and started automatically." ;;
+            "service_path") echo "Service script path:" ;;
+            "settings_menu") echo "=== Edit settings ===" ;;
+            "settings_base_url") echo "1) Change domain / IP / BASE_URL" ;;
+            "settings_prefix") echo "2) Change PREFIX" ;;
+            "settings_privacy") echo "3) Enable/disable private mode" ;;
+            "settings_allowed_add") echo "4) Add allowed user ID" ;;
+            "settings_allowed_reset") echo "5) Reset allowed user IDs" ;;
+            "settings_show") echo "6) Show current settings" ;;
+            "settings_back") echo "0) Back" ;;
+            "settings_saved") echo "✅ Settings saved." ;;
+            "settings_current") echo "Current settings:" ;;
+            "ask_new_prefix") echo -n "Enter new PREFIX (can be empty): " ;;
+            "ask_manual_ids") echo -n "Enter user IDs comma-separated (can be empty): " ;;
+            "ask_enable_private") echo -n "Enable private mode? (y/n) [y]: " ;;
+            "ask_change_mode") echo -n "Use domain? (y/n) [y]: " ;;
+            "ask_rebuild_nginx") echo -n "Reconfigure Nginx/HTTPS for domain? (y/n) [y]: " ;;
+            "cert_exists") echo "SSL certificate already exists, re-issuing is not needed." ;;
+            "full_reset_done") echo "✅ Full reset of service, config and cache completed." ;;
         esac
     fi
 }
@@ -123,7 +169,7 @@ choose_language() {
 check_base_deps() {
     msg "check_deps"
     local missing=()
-    for cmd in curl openssl python3 systemctl; do
+    for cmd in curl openssl python3 systemctl realpath; do
         command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
     done
 
@@ -131,45 +177,57 @@ check_base_deps() {
         msg "dep_missing"; echo " ${missing[*]}"
         if command -v apt-get >/dev/null 2>&1; then
             sudo apt-get update
-            sudo apt-get install -y curl openssl python3 systemd || true
+            sudo apt-get install -y curl openssl python3 systemd coreutils || true
         elif command -v yum >/dev/null 2>&1; then
-            sudo yum install -y curl openssl python3 systemd || true
+            sudo yum install -y curl openssl python3 systemd coreutils || true
         fi
     fi
 }
 
-setup_wizard() {
-    check_base_deps
-    echo ""
-    msg "setup_start"
+ensure_install_dir() {
+    mkdir -p "$INSTALL_DIR"
+}
 
-    read -p "$(msg 'ask_token')" bot_token
+save_env_file() {
+    ensure_install_dir
+    cat > "${INSTALL_DIR}/.env" <<EOF
+BOT_TOKEN=$BOT_TOKEN
+BASE_URL=$BASE_URL
+PORT=$PORT
+PREFIX=$(printf '%q' "${PREFIX:-}")
+ALLOWED_USER_IDS=${ALLOWED_USER_IDS:-}
+USE_WEBHOOK=$USE_WEBHOOK
+EOF
+}
 
-    local use_webhook="false"
-    local base_url=""
-    local bot_port="80"
+domain_cert_exists() {
+    local domain="$1"
+    [[ -n "$domain" ]] || return 1
+    [[ -f "/etc/letsencrypt/live/${domain}/fullchain.pem" && -f "/etc/letsencrypt/live/${domain}/privkey.pem" ]]
+}
 
-    read -p "$(msg 'ask_has_domain')" has_domain
-    if [[ -z "$has_domain" || "$has_domain" == "y" || "$has_domain" == "Y" || "$has_domain" == "д" || "$has_domain" == "Д" ]]; then
-        read -p "$(msg 'ask_domain')" raw_domain
-        raw_domain=$(echo "$raw_domain" | sed -e 's|^[^/]*//||' -e 's|/.*$||')
+normalize_domain() {
+    echo "$1" | sed -e 's|^[^/]*//||' -e 's|/.*$||'
+}
 
-        read -p "$(msg 'ask_nginx')" setup_nginx
-        if [[ -z "$setup_nginx" || "$setup_nginx" == "y" || "$setup_nginx" == "Y" || "$setup_nginx" == "д" || "$setup_nginx" == "Д" ]]; then
-            [[ $EUID -ne 0 ]] && { msg "need_root"; exit 1; }
+extract_domain_from_base_url() {
+    python3 - <<'PY' "$1"
+import sys, urllib.parse
+u = sys.argv[1]
+try:
+    p = urllib.parse.urlparse(u)
+    print(p.hostname or "", end="")
+except Exception:
+    print("", end="")
+PY
+}
 
-            if command -v apt-get >/dev/null 2>&1; then
-                apt-get update
-                apt-get install -y nginx certbot python3-certbot-nginx
-            elif command -v yum >/dev/null 2>&1; then
-                yum install -y epel-release || true
-                yum install -y nginx certbot python3-certbot-nginx
-            fi
+configure_nginx_for_domain() {
+    local raw_domain="$1"
+    local bot_port="$2"
 
-            bot_port="80"
-
-            mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
-            cat > "/etc/nginx/sites-available/$raw_domain" <<EOF
+    mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+    cat > "/etc/nginx/sites-available/$raw_domain" <<EOF
 server {
     listen 80;
     server_name $raw_domain;
@@ -191,19 +249,87 @@ server {
 }
 EOF
 
-            ln -sf "/etc/nginx/sites-available/$raw_domain" "/etc/nginx/sites-enabled/$raw_domain"
-            rm -f /etc/nginx/sites-enabled/default
-            nginx -t
-            systemctl restart nginx
+    ln -sf "/etc/nginx/sites-available/$raw_domain" "/etc/nginx/sites-enabled/$raw_domain"
+    rm -f /etc/nginx/sites-enabled/default
+    nginx -t
+    systemctl restart nginx
 
-            certbot --nginx -d "$raw_domain" --non-interactive --agree-tos --register-unsafely-without-email || true
-            systemctl reload nginx || true
+    if domain_cert_exists "$raw_domain"; then
+        msg "cert_exists"
+    else
+        certbot --nginx -d "$raw_domain" --non-interactive --agree-tos --register-unsafely-without-email || true
+    fi
 
+    systemctl reload nginx || true
+}
+
+collect_allowed_ids_interactive() {
+    local bot_token="$1"
+    local allowed_ids=""
+    curl -s "https://api.telegram.org/bot${bot_token}/deleteWebhook" >/dev/null || true
+    local offset=0
+
+    while true; do
+        echo ""
+        msg "listen_user"
+        local user_added=false
+        while [[ "$user_added" == false ]]; do
+            updates=$(curl -s "https://api.telegram.org/bot${bot_token}/getUpdates?offset=$offset&timeout=5")
+            if echo "$updates" | grep -q '"update_id"'; then
+                upd_id=$(echo "$updates" | grep -o '"update_id":[0-9]*' | tail -1 | cut -d: -f2)
+                u_id=$(echo "$updates" | grep -o '"from":{"id":[0-9]*' | tail -1 | cut -d: -f3)
+                u_name=$(echo "$updates" | grep -o '"first_name":"[^"]*"' | tail -1 | cut -d'"' -f4 | sed 's/\\//g')
+                offset=$((upd_id + 1))
+                msg "user_found"; echo " ID: $u_id | Name: $u_name"
+                read -p "$(msg 'ask_add_user')" add_u
+                if [[ -z "$add_u" || "$add_u" == "y" || "$add_u" == "Y" || "$add_u" == "д" || "$add_u" == "Д" ]]; then
+                    [[ -z "$allowed_ids" ]] && allowed_ids="$u_id" || allowed_ids="$allowed_ids,$u_id"
+                fi
+                user_added=true
+            fi
+            sleep 1
+        done
+
+        read -p "$(msg 'ask_more_user')" more_u
+        [[ "$more_u" != "y" && "$more_u" != "Y" && "$more_u" != "д" && "$more_u" != "Д" ]] && break
+    done
+
+    echo "$allowed_ids"
+}
+
+interactive_collect_base_url_settings() {
+    local bot_port="8080"
+    local use_webhook="false"
+    local base_url=""
+
+    read -p "$(msg 'ask_change_mode')" has_domain
+    if [[ -z "$has_domain" || "$has_domain" == "y" || "$has_domain" == "Y" || "$has_domain" == "д" || "$has_domain" == "Д" ]]; then
+        read -p "$(msg 'ask_domain')" raw_domain
+        raw_domain=$(normalize_domain "$raw_domain")
+
+        read -p "$(msg 'ask_rebuild_nginx')" setup_nginx
+        if [[ -z "$setup_nginx" || "$setup_nginx" == "y" || "$setup_nginx" == "Y" || "$setup_nginx" == "д" || "$setup_nginx" == "Д" ]]; then
+            [[ $EUID -ne 0 ]] && { msg "need_root"; return 1; }
+
+            if command -v apt-get >/dev/null 2>&1; then
+                apt-get update
+                apt-get install -y nginx certbot python3-certbot-nginx || true
+            elif command -v yum >/dev/null 2>&1; then
+                yum install -y epel-release || true
+                yum install -y nginx certbot python3-certbot-nginx || true
+            fi
+
+            bot_port="8080"
+            configure_nginx_for_domain "$raw_domain" "$bot_port"
             use_webhook="true"
-            base_url="https://${raw_domain}"
+            if domain_cert_exists "$raw_domain"; then
+                base_url="https://${raw_domain}"
+            else
+                base_url="http://${raw_domain}"
+            fi
         else
             read -p "$(msg 'ask_port')" bot_port
-            bot_port=${bot_port:-80}
+            bot_port=${bot_port:-8080}
             use_webhook="true"
             if [[ "$bot_port" == "80" || "$bot_port" == "443" ]]; then
                 base_url="http://${raw_domain}"
@@ -219,7 +345,7 @@ EOF
         final_ip=${custom_ip:-$detected_ip}
 
         read -p "$(msg 'ask_port')" bot_port
-        bot_port=${bot_port:-80}
+        bot_port=${bot_port:-8080}
         use_webhook="false"
 
         if [[ "$bot_port" == "80" ]]; then
@@ -229,47 +355,33 @@ EOF
         fi
     fi
 
-    read -p "$(msg 'ask_prefix')" prefix
+    echo "${base_url}|${bot_port}|${use_webhook}"
+}
+
+setup_wizard() {
+    check_base_deps
+    echo ""
+    msg "setup_start"
+
+    read -p "$(msg 'ask_token')" BOT_TOKEN
+
+    local result
+    result=$(interactive_collect_base_url_settings)
+    BASE_URL="${result%%|*}"
+    local rest="${result#*|}"
+    PORT="${rest%%|*}"
+    USE_WEBHOOK="${rest##*|}"
+
+    read -p "$(msg 'ask_prefix')" PREFIX
     local allowed_ids=""
     read -p "$(msg 'ask_allowed')" req_allow
 
     if [[ "$req_allow" == "y" || "$req_allow" == "Y" || "$req_allow" == "д" || "$req_allow" == "Д" ]]; then
-        curl -s "https://api.telegram.org/bot${bot_token}/deleteWebhook" >/dev/null || true
-        local offset=0
-        while true; do
-            echo ""
-            msg "listen_user"
-            local user_added=false
-            while [[ "$user_added" == false ]]; do
-                updates=$(curl -s "https://api.telegram.org/bot${bot_token}/getUpdates?offset=$offset&timeout=5")
-                if echo "$updates" | grep -q '"update_id"'; then
-                    upd_id=$(echo "$updates" | grep -o '"update_id":[0-9]*' | tail -1 | cut -d: -f2)
-                    u_id=$(echo "$updates" | grep -o '"from":{"id":[0-9]*' | tail -1 | cut -d: -f3)
-                    u_name=$(echo "$updates" | grep -o '"first_name":"[^"]*"' | tail -1 | cut -d'"' -f4 | sed 's/\\//g')
-                    offset=$((upd_id + 1))
-                    msg "user_found"; echo " ID: $u_id | Name: $u_name"
-                    read -p "$(msg 'ask_add_user')" add_u
-                    if [[ -z "$add_u" || "$add_u" == "y" || "$add_u" == "Y" || "$add_u" == "д" || "$add_u" == "Д" ]]; then
-                        [[ -z "$allowed_ids" ]] && allowed_ids="$u_id" || allowed_ids="$allowed_ids,$u_id"
-                    fi
-                    user_added=true
-                fi
-                sleep 1
-            done
-
-            read -p "$(msg 'ask_more_user')" more_u
-            [[ "$more_u" != "y" && "$more_u" != "Y" && "$more_u" != "д" && "$more_u" != "Д" ]] && break
-        done
+        allowed_ids=$(collect_allowed_ids_interactive "$BOT_TOKEN")
     fi
+    ALLOWED_USER_IDS="$allowed_ids"
 
-    cat > .env <<EOF
-BOT_TOKEN=$bot_token
-BASE_URL=$base_url
-PORT=$bot_port
-PREFIX=$(printf '%q' "$prefix")
-ALLOWED_USER_IDS=$allowed_ids
-USE_WEBHOOK=$use_webhook
-EOF
+    save_env_file
 
     echo ""
     msg "setup_done"
@@ -277,16 +389,17 @@ EOF
 }
 
 load_env_safe() {
-    [[ -f .env ]] || return 1
+    [[ -f "${INSTALL_DIR}/.env" ]] || return 1
     set -a
     # shellcheck disable=SC1091
-    source ./.env
+    source "${INSTALL_DIR}/.env"
     set +a
 }
 
 file_cache_path() { echo "${FILE_CACHE_DIR}/$1.json"; }
 file_id_map_path() { echo "${FILE_ID_MAP_DIR}/$1.id"; }
 text_cache_path() { echo "${TEXT_CACHE_DIR}/$1.txt"; }
+text_meta_path() { echo "${TEXT_META_DIR}/$1.json"; }
 
 json_escape() {
     python3 - <<'PY' "$1"
@@ -302,23 +415,20 @@ atomic_write() {
     mv -f "$tmp" "$dst"
 }
 
-safe_http_send() {
-    local code="$1"
-    local ctype="$2"
-    local body="$3"
-    local body_len
-    body_len=$(printf "%s" "$body" | wc -c | awk '{print $1}')
-    printf "HTTP/1.1 %s\r\n" "$code"
-    [[ -n "$ctype" ]] && printf "Content-Type: %s\r\n" "$ctype"
-    printf "Content-Length: %s\r\n" "$body_len"
-    printf "Connection: close\r\n"
-    printf "Cache-Control: no-store\r\n"
-    printf "\r\n"
-    printf "%s" "$body"
+random_short_id() {
+    python3 - <<'PY'
+import secrets
+print(secrets.token_urlsafe(6), end="")
+PY
 }
 
-safe_http_not_found() {
-    safe_http_send "404 Not Found" "text/plain; charset=utf-8" "Not Found"
+cleanup_runtime_cache() {
+    rm -rf /tmp/tg_bot_cache /tmp/tg_text_buffer /tmp/tg_file_cache /tmp/tg_file_id_map /tmp/tg_text_cache /tmp/tg_text_meta
+}
+
+full_reset_local_state() {
+    cleanup_runtime_cache
+    rm -f "${INSTALL_DIR}/.env"
 }
 
 cleanup_text_cache() {
@@ -334,6 +444,19 @@ cleanup_text_cache() {
     done
 }
 
+cleanup_text_meta_cache() {
+    local now
+    now=$(date +%s)
+    for f in "${TEXT_META_DIR}"/*.json; do
+        [[ -e "$f" ]] || continue
+        local mt
+        mt=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
+        if (( now - mt > 86400 * 30 )); then
+            rm -f "$f"
+        fi
+    done
+}
+
 extract_json_text_field() {
     python3 - <<'PY' "$1"
 import sys, json
@@ -343,7 +466,6 @@ try:
 except Exception:
     print("", end="")
     raise SystemExit(0)
-
 msg = obj.get("message") or {}
 text = msg.get("text", "")
 print(text, end="")
@@ -369,8 +491,6 @@ if expr == "chat_id":
     val = msg.get("chat", {}).get("id", "")
 elif expr == "user_id":
     val = msg.get("from", {}).get("id", "")
-elif expr == "message_id":
-    val = msg.get("message_id", "")
 elif expr == "document_file_id":
     val = msg.get("document", {}).get("file_id", "")
 elif expr == "document_file_name":
@@ -381,6 +501,8 @@ elif expr == "video_file_id":
     val = msg.get("video", {}).get("file_id", "")
 elif expr == "video_mime_type":
     val = msg.get("video", {}).get("mime_type", "")
+elif expr == "video_file_name":
+    val = msg.get("video", {}).get("file_name", "")
 elif expr == "audio_file_id":
     val = msg.get("audio", {}).get("file_id", "")
 elif expr == "audio_file_name":
@@ -395,13 +517,6 @@ elif expr == "photo_last_file_id":
     photos = msg.get("photo", [])
     val = photos[-1].get("file_id", "") if photos else ""
 print(val, end="")
-PY
-}
-
-random_short_id() {
-    python3 - <<'PY'
-import secrets
-print(secrets.token_urlsafe(6), end="")
 PY
 }
 
@@ -482,21 +597,6 @@ except Exception:
 PY
 }
 
-refresh_file_cache_by_short_id() {
-    local short_id="$1"
-    local raw
-    raw=$(load_file_cache_json "$short_id") || return 1
-
-    python3 - <<'PY' "$raw"
-import sys, json
-obj = json.loads(sys.argv[1])
-print(obj.get("file_id",""))
-print(obj.get("ext",""))
-print(obj.get("file_name",""))
-print(obj.get("mime_type",""))
-PY
-}
-
 update_file_cache_from_short_id() {
     local short_id="$1"
     local raw file_id ext file_name mime_type file_path
@@ -538,12 +638,55 @@ create_or_update_file_link() {
 
     if [[ -n "$file_path" ]]; then
         save_file_cache "$short_id" "$file_id" "$ext" "$file_name" "$mime_type" "$file_path"
+    elif [[ ! -f "$(file_cache_path "$short_id")" ]]; then
+        return 1
     fi
 
     local message="${PREFIX}${BASE_URL}/file/${short_id}.${ext}"
     curl -s -X POST "${API}/sendMessage" \
         --data-urlencode "chat_id=${chat_id}" \
         --data-urlencode "text=${message}" >/dev/null
+}
+
+save_text_meta() {
+    local text_id="$1"
+    local chat_id="$2"
+    local user_id="$3"
+    local content="$4"
+    local updated_at
+    updated_at=$(date +%s)
+
+    cat <<EOF | atomic_write "$(text_meta_path "$text_id")"
+{
+  "text_id": $(json_escape "$text_id"),
+  "chat_id": $(json_escape "$chat_id"),
+  "user_id": $(json_escape "$user_id"),
+  "content": $(json_escape "$content"),
+  "updated_at": $updated_at
+}
+EOF
+}
+
+restore_text_cache_from_meta() {
+    local text_id="$1"
+    local meta_file
+    meta_file=$(text_meta_path "$text_id")
+    [[ -f "$meta_file" ]] || return 1
+
+    python3 - <<'PY' "$meta_file" "$(text_cache_path "$text_id")"
+import sys, json
+meta_path = sys.argv[1]
+cache_path = sys.argv[2]
+try:
+    with open(meta_path, "r", encoding="utf-8") as f:
+        obj = json.load(f)
+    content = obj.get("content", "")
+    with open(cache_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    print("ok", end="")
+except Exception:
+    print("", end="")
+PY
 }
 
 handle_text() {
@@ -570,14 +713,16 @@ handle_text() {
         [[ -n "$joined_text" ]] || exit 0
 
         cleanup_text_cache
+        cleanup_text_meta_cache
 
         local text_id
         while true; do
             text_id=$(random_short_id)
-            [[ ! -f "$(text_cache_path "$text_id")" ]] && break
+            [[ ! -f "$(text_cache_path "$text_id")" ]] && [[ ! -f "$(text_meta_path "$text_id")" ]] && break
         done
 
         printf '%s' "$joined_text" > "$(text_cache_path "$text_id")"
+        save_text_meta "$text_id" "$chat_id" "$user_id" "$joined_text"
 
         local message="${PREFIX}${BASE_URL}/file/${text_id}.txt"
         curl -s -X POST "${API}/sendMessage" \
@@ -600,7 +745,7 @@ process_update() {
     fi
 
     local document_file_id document_file_name document_mime_type
-    local video_file_id video_mime_type photo_file_id text_content
+    local video_file_id video_mime_type video_file_name photo_file_id text_content
     local audio_file_id audio_file_name audio_mime_type
     local voice_file_id voice_mime_type
 
@@ -609,6 +754,7 @@ process_update() {
     document_mime_type=$(extract_json_field_python "$json" "document_mime_type")
     video_file_id=$(extract_json_field_python "$json" "video_file_id")
     video_mime_type=$(extract_json_field_python "$json" "video_mime_type")
+    video_file_name=$(extract_json_field_python "$json" "video_file_name")
     photo_file_id=$(extract_json_field_python "$json" "photo_last_file_id")
     audio_file_id=$(extract_json_field_python "$json" "audio_file_id")
     audio_file_name=$(extract_json_field_python "$json" "audio_file_name")
@@ -619,29 +765,31 @@ process_update() {
     if [[ -n "$document_file_id" ]]; then
         local ext="${document_file_name##*.}"
         [[ "$ext" == "$document_file_name" || -z "$ext" ]] && ext="bin"
-        create_or_update_file_link "$chat_id" "$document_file_id" "$ext" "$document_file_name" "$document_mime_type"
+        create_or_update_file_link "$chat_id" "$document_file_id" "$ext" "$document_file_name" "$document_mime_type" || true
         return 0
     fi
 
     if [[ -n "$photo_file_id" ]]; then
-        create_or_update_file_link "$chat_id" "$photo_file_id" "jpg" "image.jpg" "image/jpeg"
+        create_or_update_file_link "$chat_id" "$photo_file_id" "jpg" "image.jpg" "image/jpeg" || true
         return 0
     fi
 
     if [[ -n "$video_file_id" ]]; then
-        create_or_update_file_link "$chat_id" "$video_file_id" "mp4" "video.mp4" "${video_mime_type:-video/mp4}"
+        local ext="mp4"
+        [[ -n "$video_file_name" && "$video_file_name" == *.* ]] && ext="${video_file_name##*.}"
+        create_or_update_file_link "$chat_id" "$video_file_id" "$ext" "${video_file_name:-video.$ext}" "${video_mime_type:-video/mp4}" || true
         return 0
     fi
 
     if [[ -n "$audio_file_id" ]]; then
         local ext="${audio_file_name##*.}"
         [[ "$ext" == "$audio_file_name" || -z "$ext" ]] && ext="mp3"
-        create_or_update_file_link "$chat_id" "$audio_file_id" "$ext" "${audio_file_name:-audio.$ext}" "$audio_mime_type"
+        create_or_update_file_link "$chat_id" "$audio_file_id" "$ext" "${audio_file_name:-audio.$ext}" "$audio_mime_type" || true
         return 0
     fi
 
     if [[ -n "$voice_file_id" ]]; then
-        create_or_update_file_link "$chat_id" "$voice_file_id" "ogg" "voice.ogg" "${voice_mime_type:-audio/ogg}"
+        create_or_update_file_link "$chat_id" "$voice_file_id" "ogg" "voice.ogg" "${voice_mime_type:-audio/ogg}" || true
         return 0
     fi
 
@@ -654,8 +802,14 @@ process_update() {
 serve_text_meta() {
     local text_id="$1"
     cleanup_text_cache
+
     local file
     file=$(text_cache_path "$text_id")
+
+    if [[ ! -f "$file" ]]; then
+        restore_text_cache_from_meta "$text_id" >/dev/null 2>&1 || true
+    fi
+
     [[ -f "$file" ]] || { echo '{"ok":false,"status":404}'; return 0; }
 
     python3 - <<'PY' "$file"
@@ -726,6 +880,10 @@ ml = mime_type.lower()
 
 if ml.startswith("image/"):
     disp = "inline"
+elif ml.startswith("video/"):
+    disp = "inline"
+elif ml.startswith("audio/"):
+    disp = "inline"
 elif ml.startswith("text/plain"):
     disp = "inline"
 elif ml.startswith("text/html"):
@@ -752,11 +910,10 @@ import re
 import sys
 import json
 import urllib.request
-import urllib.parse
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-PORT = int(os.environ.get("PORT", "80"))
+PORT = int(os.environ.get("PORT", "8080"))
 USE_WEBHOOK = os.environ.get("USE_WEBHOOK", "false").lower()
 SCRIPT_PATH = os.environ.get("SCRIPT_PATH", "")
 
@@ -799,9 +956,9 @@ class Handler(BaseHTTPRequestHandler):
         ext = m.group(2).lower()
 
         if ext == "txt":
-            rc, stdout, stderr = sh(SCRIPT_PATH, "--serve-text-meta", item_id)
+            _, stdout, _ = sh(SCRIPT_PATH, "--serve-text-meta", item_id)
         else:
-            rc, stdout, stderr = sh(SCRIPT_PATH, "--serve-file-meta", item_id)
+            _, stdout, _ = sh(SCRIPT_PATH, "--serve-file-meta", item_id)
 
         try:
             meta = json.loads(stdout or "{}")
@@ -836,20 +993,16 @@ class Handler(BaseHTTPRequestHandler):
             url = meta["url"]
             req = urllib.request.Request(url, headers={"User-Agent": "tg-proxy/1.0"})
             try:
-                with urllib.request.urlopen(req, timeout=60) as resp:
+                with urllib.request.urlopen(req, timeout=120) as resp:
                     self.send_response(200)
-
                     ctype = meta.get("content_type") or resp.headers.get("Content-Type") or "application/octet-stream"
                     self.send_header("Content-Type", ctype)
-
                     file_name = meta.get("file_name", "file")
                     disp = meta.get("content_disposition", "attachment")
                     self.send_header("Content-Disposition", f'{disp}; filename="{file_name}"')
-
                     clen = resp.headers.get("Content-Length")
                     if clen:
                         self.send_header("Content-Length", clen)
-
                     self.send_header("Cache-Control", meta.get("cache_control", "public, max-age=3600"))
                     self.send_header("Connection", "close")
                     self.end_headers()
@@ -922,17 +1075,35 @@ auto_restart() {
 }
 
 service_exists() {
-    systemctl cat telegram-bot >/dev/null 2>&1
+    systemctl cat "$APP_NAME" >/dev/null 2>&1
 }
 
 service_is_active() {
-    systemctl is-active --quiet telegram-bot 2>/dev/null
+    systemctl is-active --quiet "$APP_NAME" 2>/dev/null
+}
+
+reset_service_and_cache() {
+    [[ $EUID -ne 0 ]] && { msg "must_use_sudo"; exit 1; }
+
+    systemctl stop "$APP_NAME" 2>/dev/null || true
+    systemctl disable "$APP_NAME" 2>/dev/null || true
+    rm -f "$SERVICE_FILE"
+    systemctl daemon-reload || true
+    systemctl reset-failed || true
+    pkill -f -- '--run-bot' 2>/dev/null || true
+    cleanup_runtime_cache
 }
 
 install_service() {
     [[ $EUID -ne 0 ]] && { msg "must_use_sudo"; exit 1; }
 
-    cat > /etc/systemd/system/telegram-bot.service <<EOF
+    mkdir -p "$INSTALL_DIR"
+    cp "$(realpath "$0")" "$INSTALL_SCRIPT"
+    chmod +x "$INSTALL_SCRIPT"
+
+    reset_service_and_cache
+
+    cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Telegram File Sharing Bot
 After=network.target
@@ -940,8 +1111,8 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=$(pwd)
-ExecStart=$(realpath "$0") --run-bot
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_SCRIPT --run-bot
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
@@ -951,53 +1122,149 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable telegram-bot
-    systemctl restart telegram-bot
+    systemctl enable "$APP_NAME"
+    systemctl restart "$APP_NAME"
+
     msg "service_installed"
+    msg "service_started"
+    msg "service_path"; echo " $INSTALL_SCRIPT"
 }
 
 start_service() {
     service_exists || { msg "service_not_found"; return; }
     [[ $EUID -ne 0 ]] && { msg "must_use_sudo"; exit 1; }
-    systemctl start telegram-bot
+    systemctl start "$APP_NAME"
     msg "service_started"
 }
 
 restart_service() {
     service_exists || { msg "service_not_found"; return; }
     [[ $EUID -ne 0 ]] && { msg "must_use_sudo"; exit 1; }
-    systemctl restart telegram-bot
+    systemctl restart "$APP_NAME"
     msg "service_restart_done"
 }
 
 stop_service() {
     service_exists || { msg "service_not_found"; return; }
     [[ $EUID -ne 0 ]] && { msg "must_use_sudo"; exit 1; }
-    systemctl stop telegram-bot
+    systemctl stop "$APP_NAME"
     msg "service_stop_done"
 }
 
 show_status() {
     service_exists || { msg "service_not_found"; return; }
-    systemctl status telegram-bot || true
+    systemctl status "$APP_NAME" || true
 }
 
 show_logs() {
     service_exists || { msg "service_not_found"; return; }
-    journalctl -u telegram-bot -n 100 --no-pager || true
+    journalctl -u "$APP_NAME" -n 100 --no-pager || true
 }
 
 reconfigure_bot() {
-    rm -f .env
+    full_reset_local_state
     msg "reconfig_done"
     setup_wizard
+}
+
+show_current_settings() {
+    echo ""
+    msg "settings_current"
+    echo "BOT_TOKEN=***hidden***"
+    echo "BASE_URL=${BASE_URL:-}"
+    echo "PORT=${PORT:-}"
+    echo "PREFIX=${PREFIX:-}"
+    echo "ALLOWED_USER_IDS=${ALLOWED_USER_IDS:-}"
+    echo "USE_WEBHOOK=${USE_WEBHOOK:-}"
+}
+
+edit_settings_menu() {
+    load_env_safe || return 1
+
+    while true; do
+        echo ""
+        msg "settings_menu"
+        msg "settings_base_url"
+        msg "settings_prefix"
+        msg "settings_privacy"
+        msg "settings_allowed_add"
+        msg "settings_allowed_reset"
+        msg "settings_show"
+        msg "settings_back"
+        read -p "$(msg 'menu_prompt')" action
+
+        case "$action" in
+            1)
+                local result
+                result=$(interactive_collect_base_url_settings) || true
+                if [[ -n "$result" && "$result" == *"|"* ]]; then
+                    BASE_URL="${result%%|*}"
+                    local rest="${result#*|}"
+                    PORT="${rest%%|*}"
+                    USE_WEBHOOK="${rest##*|}"
+                    save_env_file
+                    msg "settings_saved"
+                fi
+                ;;
+            2)
+                read -p "$(msg 'ask_new_prefix')" PREFIX
+                save_env_file
+                msg "settings_saved"
+                ;;
+            3)
+                read -p "$(msg 'ask_enable_private')" ans
+                if [[ -z "$ans" || "$ans" == "y" || "$ans" == "Y" || "$ans" == "д" || "$ans" == "Д" ]]; then
+                    local new_ids
+                    new_ids=$(collect_allowed_ids_interactive "$BOT_TOKEN")
+                    ALLOWED_USER_IDS="$new_ids"
+                else
+                    ALLOWED_USER_IDS=""
+                fi
+                save_env_file
+                msg "settings_saved"
+                ;;
+            4)
+                read -p "$(msg 'ask_manual_ids')" add_ids
+                if [[ -n "${ALLOWED_USER_IDS:-}" && -n "${add_ids:-}" ]]; then
+                    ALLOWED_USER_IDS="${ALLOWED_USER_IDS},${add_ids}"
+                elif [[ -n "${add_ids:-}" ]]; then
+                    ALLOWED_USER_IDS="${add_ids}"
+                fi
+                save_env_file
+                msg "settings_saved"
+                ;;
+            5)
+                ALLOWED_USER_IDS=""
+                save_env_file
+                msg "settings_saved"
+                ;;
+            6)
+                show_current_settings
+                read -r -p "$(msg 'press_enter')" _
+                ;;
+            0)
+                break
+                ;;
+            *)
+                msg "invalid_choice"
+                ;;
+        esac
+    done
+}
+
+full_reset_everything() {
+    [[ $EUID -ne 0 ]] && { msg "must_use_sudo"; exit 1; }
+    reset_service_and_cache
+    rm -f "${INSTALL_DIR}/.env"
+    rm -f "$INSTALL_SCRIPT"
+    msg "full_reset_done"
 }
 
 init_runtime() {
     load_env_safe
     : "${BOT_TOKEN:?BOT_TOKEN not set}"
     : "${BASE_URL:?BASE_URL not set}"
-    : "${PORT:=80}"
+    : "${PORT:=8080}"
     : "${PREFIX:=}"
     : "${ALLOWED_USER_IDS:=}"
     : "${USE_WEBHOOK:=false}"
@@ -1008,9 +1275,11 @@ init_runtime() {
     FILE_CACHE_DIR="/tmp/tg_file_cache"
     FILE_ID_MAP_DIR="/tmp/tg_file_id_map"
     TEXT_CACHE_DIR="/tmp/tg_text_cache"
+    TEXT_META_DIR="/tmp/tg_text_meta"
 
-    mkdir -p "$CACHE_DIR" "$TEXT_BUFFER_DIR" "$FILE_CACHE_DIR" "$FILE_ID_MAP_DIR" "$TEXT_CACHE_DIR"
-    SCRIPT_PATH="$(realpath "$0")"
+    mkdir -p "$CACHE_DIR" "$TEXT_BUFFER_DIR" "$FILE_CACHE_DIR" "$FILE_ID_MAP_DIR" "$TEXT_CACHE_DIR" "$TEXT_META_DIR"
+    SCRIPT_PATH="$INSTALL_SCRIPT"
+    [[ -f "$SCRIPT_PATH" ]] || SCRIPT_PATH="$(realpath "$0")"
 }
 
 show_detected_state() {
@@ -1029,6 +1298,7 @@ show_detected_state() {
 
 interactive_menu() {
     while true; do
+        load_env_safe || true
         show_detected_state
         echo ""
         msg "menu_choose_action"
@@ -1036,15 +1306,19 @@ interactive_menu() {
         if ! service_exists; then
             msg "menu_install_and_start"
             msg "menu_reconfigure"
+            msg "menu_edit_settings"
             msg "menu_show_status"
             msg "menu_show_logs"
+            msg "menu_full_reset"
             msg "menu_exit"
             read -p "$(msg 'menu_prompt')" action
             case "$action" in
                 1) install_service ;;
                 2) reconfigure_bot ;;
+                4) edit_settings_menu; install_service ;;
                 7) show_status; read -r -p "$(msg 'press_enter')" _ ;;
                 8) show_logs; read -r -p "$(msg 'press_enter')" _ ;;
+                9) full_reset_everything ;;
                 0) exit 0 ;;
                 *) msg "invalid_choice" ;;
             esac
@@ -1052,16 +1326,20 @@ interactive_menu() {
             msg "menu_restart_service"
             msg "menu_stop_service"
             msg "menu_reconfigure_alt"
+            msg "menu_edit_settings"
             msg "menu_show_status"
             msg "menu_show_logs"
+            msg "menu_full_reset"
             msg "menu_exit"
             read -p "$(msg 'menu_prompt')" action
             case "$action" in
                 1) restart_service ;;
                 2) stop_service ;;
-                3) reconfigure_bot ;;
+                3) reconfigure_bot; install_service ;;
+                4) edit_settings_menu; install_service ;;
                 7) show_status; read -r -p "$(msg 'press_enter')" _ ;;
                 8) show_logs; read -r -p "$(msg 'press_enter')" _ ;;
+                9) full_reset_everything ;;
                 0) exit 0 ;;
                 *) msg "invalid_choice" ;;
             esac
@@ -1069,16 +1347,20 @@ interactive_menu() {
             msg "menu_start_service"
             msg "menu_restart_service_alt"
             msg "menu_reconfigure_alt"
+            msg "menu_edit_settings"
             msg "menu_show_status"
             msg "menu_show_logs"
+            msg "menu_full_reset"
             msg "menu_exit"
             read -p "$(msg 'menu_prompt')" action
             case "$action" in
                 1) start_service ;;
                 2) restart_service ;;
-                3) reconfigure_bot ;;
+                3) reconfigure_bot; install_service ;;
+                4) edit_settings_menu; install_service ;;
                 7) show_status; read -r -p "$(msg 'press_enter')" _ ;;
                 8) show_logs; read -r -p "$(msg 'press_enter')" _ ;;
+                9) full_reset_everything ;;
                 0) exit 0 ;;
                 *) msg "invalid_choice" ;;
             esac
@@ -1088,12 +1370,12 @@ interactive_menu() {
 
 main() {
     choose_language
-    if [[ ! -f .env ]]; then
+    if [[ ! -f "${INSTALL_DIR}/.env" ]]; then
         echo ""
         msg "menu_not_configured"
         setup_wizard
-        init_runtime
         install_service
+        msg "service_autostarted"
     else
         interactive_menu
     fi
