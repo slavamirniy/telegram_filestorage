@@ -19,7 +19,7 @@ This is an ultra-lightweight, pure Bash script that acts as a bridge between Tel
 Run this command on a fresh Linux server (Ubuntu/Debian/CentOS). It will download the script and launch the interactive setup wizard:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/slavamirniy/telegram_filestorage/refs/heads/main/telegram_filestorage.sh | tr -d '\r' > setup.sh && sudo bash setup.sh install
+curl -sSL https://raw.githubusercontent.com/slavamirniy/telegram_filestorage/refs/heads/main/telegram_filestorage.sh | tr -d '\r' > setup.sh && chmod +x setup.sh && sudo ./setup.sh
 ```
 
 ## Requirements
@@ -55,7 +55,7 @@ A Telegram Bot Token (from @BotFather)
 Выполните эту команду на чистом Linux-сервере (Ubuntu/Debian/CentOS). Она скачает скрипт и сразу запустит интерактивный мастер установки:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/slavamirniy/telegram_filestorage/refs/heads/main/telegram_filestorage.sh | tr -d '\r' > setup.sh && sudo bash setup.sh install
+curl -sSL https://raw.githubusercontent.com/slavamirniy/telegram_filestorage/refs/heads/main/telegram_filestorage.sh | tr -d '\r' > setup.sh && chmod +x setup.sh && sudo ./setup.sh
 ```
 
 Linux сервер (нужны root-права для автоматической настройки Nginx)
