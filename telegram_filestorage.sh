@@ -17,7 +17,7 @@ msg() {
             "detecting_ip") echo "Определяем IP адрес сервера..." ;;
             "ask_ip") echo -n "Подтвердите IP сервера (Enter для использования $2): " ;;
             "info_polling") echo "Домен не указан. Бот будет работать по HTTP/IP без webhook." ;;
-            "ask_port") echo -n "На каком локальном порту запускать бота? [8080]: " ;;
+            "ask_port") echo -n "На каком локальном порту запускать бота? [80]: " ;;
             "ask_prefix") echo -n "Введите ПРЕФИКС для сообщений (необязательно): " ;;
             "ask_allowed") echo -n "Включить приватный режим (доступ только по вашему ID)? (y/n) [n]: " ;;
             "listen_user") echo "Ожидание... Напишите ЛЮБОЕ сообщение вашему боту в Telegram прямо сейчас." ;;
@@ -69,7 +69,7 @@ msg() {
             "detecting_ip") echo "Detecting server IP address..." ;;
             "ask_ip") echo -n "Confirm server IP (Press Enter to use $2): " ;;
             "info_polling") echo "No domain provided. Bot will work over HTTP/IP without webhook." ;;
-            "ask_port") echo -n "Which local port to run the bot on? [8080]: " ;;
+            "ask_port") echo -n "Which local port to run the bot on? [80]: " ;;
             "ask_prefix") echo -n "Enter PREFIX for messages (optional): " ;;
             "ask_allowed") echo -n "Enable private mode (restrict by User IDs)? (y/n) [n]: " ;;
             "listen_user") echo "Waiting... Send ANY message to your bot in Telegram right now." ;;
@@ -147,7 +147,7 @@ setup_wizard() {
 
     local use_webhook="false"
     local base_url=""
-    local bot_port="8080"
+    local bot_port="80"
 
     read -p "$(msg 'ask_has_domain')" has_domain
     if [[ -z "$has_domain" || "$has_domain" == "y" || "$has_domain" == "Y" || "$has_domain" == "д" || "$has_domain" == "Д" ]]; then
@@ -166,7 +166,7 @@ setup_wizard() {
                 yum install -y nginx certbot python3-certbot-nginx
             fi
 
-            bot_port="8080"
+            bot_port="80"
 
             mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
             cat > "/etc/nginx/sites-available/$raw_domain" <<EOF
@@ -203,7 +203,7 @@ EOF
             base_url="https://${raw_domain}"
         else
             read -p "$(msg 'ask_port')" bot_port
-            bot_port=${bot_port:-8080}
+            bot_port=${bot_port:-80}
             use_webhook="true"
             if [[ "$bot_port" == "80" || "$bot_port" == "443" ]]; then
                 base_url="http://${raw_domain}"
@@ -219,7 +219,7 @@ EOF
         final_ip=${custom_ip:-$detected_ip}
 
         read -p "$(msg 'ask_port')" bot_port
-        bot_port=${bot_port:-8080}
+        bot_port=${bot_port:-80}
         use_webhook="false"
 
         if [[ "$bot_port" == "80" ]]; then
@@ -756,7 +756,7 @@ import urllib.parse
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-PORT = int(os.environ.get("PORT", "8080"))
+PORT = int(os.environ.get("PORT", "80"))
 USE_WEBHOOK = os.environ.get("USE_WEBHOOK", "false").lower()
 SCRIPT_PATH = os.environ.get("SCRIPT_PATH", "")
 
@@ -997,7 +997,7 @@ init_runtime() {
     load_env_safe
     : "${BOT_TOKEN:?BOT_TOKEN not set}"
     : "${BASE_URL:?BASE_URL not set}"
-    : "${PORT:=8080}"
+    : "${PORT:=80}"
     : "${PREFIX:=}"
     : "${ALLOWED_USER_IDS:=}"
     : "${USE_WEBHOOK:=false}"
